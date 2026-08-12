@@ -1,0 +1,50 @@
+{
+  "manifest_version": 2,
+  "id": "maitu.photo-studio",
+  "version": "0.1.0",
+  "name": "MaiTu 写真",
+  "description": "让 bot 像真人一样发送手机拍摄的真实照片：含人物写真、无人物环境照、参考图库与群聊连续性。",
+  "author": {
+    "name": "tsuiraku9",
+    "url": "https://github.com/tsuiraku9"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/tsuiraku9/maitu-photo-studio",
+    "homepage": "https://github.com/tsuiraku9/maitu-photo-studio",
+    "documentation": "https://docs.mai-mai.org/plugin/"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.99.99"
+  },
+  "sdk": {
+    "min_version": "2.7.1",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [
+    {"type": "python_package", "name": "pillow", "version_spec": ">=11.0.0"},
+    {"type": "python_package", "name": "httpx", "version_spec": ">=0.27.0"}
+  ],
+  "plugin_type": "media",
+  "capabilities": [
+    "send.text",
+    "send.image",
+    "message.get_by_id",
+    "llm.generate",
+    "maisaka.context.append",
+    "maisaka.proactive.trigger"
+  ],
+  "display": {
+    "icon": {
+      "type": "lucide",
+      "value": "camera",
+      "fallback": "image"
+    }
+  },
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": ["zh-CN"]
+  }
+}
+

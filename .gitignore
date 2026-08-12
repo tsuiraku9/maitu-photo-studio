@@ -1,0 +1,24 @@
+# MaiBot runtime and plugin-local state
+config.toml
+data/
+logs/
+.dev/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.agents/
+
+# Local credentials, archives, and databases
+生图测试用api.md
+MaiBot-*.zip
+*.key
+*.secret
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# OS
+.DS_Store
+Thumbs.db

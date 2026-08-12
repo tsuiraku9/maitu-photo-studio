@@ -1,0 +1,4 @@
+services:
+  core:
+    image: maitu/maibot:1.1.4
+    pull_policy: never
