@@ -316,7 +316,13 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 properties={},
                 additional_properties=True,
             ),
-            ToolParameterInfo("source_message_id", ToolParamType.STRING, "来源消息 ID", required=False, default=""),
+            ToolParameterInfo(
+                "source_message_id",
+                ToolParamType.STRING,
+                "通常留空；优先使用当前消息、引用消息或本聊天最近一张单图",
+                required=False,
+                default="",
+            ),
             ToolParameterInfo("confirm_token", ToolParamType.STRING, "确认令牌", required=False, default=""),
         ],
     )
@@ -516,11 +522,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
     async def _person_command(self, command: AdminCommand, invocation: InvocationContext) -> str:
         person = self.service.gallery.get_person()
         if command.action in {"extract", "import"}:
-            image = await resolve_single_image(
-                self.ctx,
-                invocation,
-                source_message_id=command.options.get("message_id", ""),
-            )
+            image = await resolve_single_image(self.ctx, invocation)
             task = self.service.submit_reference_job(
                 invocation,
                 operation=command.action,
@@ -529,9 +531,26 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 image=image,
             )
             return f"人物参考任务已排队：{task.id}"
+        if command.action == "generate":
+            if person is not None:
+                raise ValueError("已有人物参考图，如需重做请先执行「人物 清空」")
+            nickname, personality = await self.service.load_host_identity()
+            if not personality:
+                raise ValueError("未能读取 MaiBot 人格设定，无法生成人物参考图")
+            appearance_hint = command.options.get("appearance_hint", "").strip()
+            task = self.service.submit_reference_job(
+                invocation,
+                operation="generate_person",
+                category=ReferenceCategory.PERSON,
+                name=command.options.get("name", "人物参考"),
+                personality=personality,
+                nickname=nickname,
+                appearance_hint=appearance_hint,
+            )
+            return f"已按人格设定排队生成人物参考：{task.id}"
         if command.action == "show":
             if person is None:
-                return "尚未设置人物参考图。"
+                return "尚未设置人物参考图。可执行「人物 提取」「人物 导入」或「人物 生成」。"
             await self._send_asset(person, invocation.stream_id)
             return self._format_asset(person)
         if command.action == "regenerate":
@@ -553,27 +572,21 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             if not self._consume_confirmation(token, action_key, invocation.user_id):
                 issued = self._issue_confirmation(action_key, invocation.user_id)
                 return (
-                    "危险操作，请在 5 分钟内再次执行："
-                    f"{self.config.plugin.command_prefix} person clear "
-                    f"confirm_token={issued}"
+                    f"危险操作，请在 5 分钟内再次执行：{self.config.plugin.command_prefix} 人物 清空 确认令牌={issued}"
                 )
             deleted = self.service.gallery.soft_delete(person.id)
             self._unlink_asset_files(deleted)
             return "人物参考图已清空。"
-        raise CommandParseError("person 支持 extract/import/show/regenerate/clear")
+        raise CommandParseError("人物 支持 提取/导入/生成/查看/重生成/清空")
 
     async def _reference_command(self, command: AdminCommand, invocation: InvocationContext) -> str:
         if command.action in {"extract", "import"}:
             if not command.args:
-                raise CommandParseError("请指定 outfit 或 scene")
+                raise CommandParseError("请指定 服装 或 场景")
             category = ReferenceCategory(command.args[0])
             if category == ReferenceCategory.PERSON:
-                raise CommandParseError("人物参考请使用 person 命令")
-            image = await resolve_single_image(
-                self.ctx,
-                invocation,
-                source_message_id=command.options.get("message_id", ""),
-            )
+                raise CommandParseError("人物参考请使用「人物」命令")
+            image = await resolve_single_image(self.ctx, invocation)
             task = self.service.submit_reference_job(
                 invocation,
                 operation=command.action,
@@ -590,7 +603,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 return "参考图库为空。"
             return "\n".join(self._format_asset(item) for item in assets)
         if not command.args:
-            raise CommandParseError(f"ref {command.action} 需要参考图 ID")
+            raise CommandParseError(f"参考 {command.action} 需要参考图 ID")
         asset = self.service.gallery.require(command.args[0])
         if command.action == "show":
             await self._send_asset(asset, invocation.stream_id)
@@ -612,11 +625,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             )
             return f"任务已排队：{task.id}"
         if command.action == "replace":
-            image = await resolve_single_image(
-                self.ctx,
-                invocation,
-                source_message_id=command.options.get("message_id", ""),
-            )
+            image = await resolve_single_image(self.ctx, invocation)
             task = self.service.submit_reference_job(
                 invocation,
                 operation="replace",
@@ -641,13 +650,13 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 issued = self._issue_confirmation(key, invocation.user_id)
                 return (
                     "危险操作，请在 5 分钟内再次执行："
-                    f"{self.config.plugin.command_prefix} ref delete {asset.id} "
-                    f"confirm_token={issued}"
+                    f"{self.config.plugin.command_prefix} 参考 删除 {asset.id} "
+                    f"确认令牌={issued}"
                 )
             deleted = self.service.gallery.soft_delete(asset.id)
             self._unlink_asset_files(deleted)
             return f"已删除参考图：{asset.id}"
-        raise CommandParseError("未知 ref 操作")
+        raise CommandParseError("未知参考操作")
 
     def _continuity_command(self, command: AdminCommand, invocation: InvocationContext) -> str:
         manager = self.service.continuity
@@ -673,14 +682,14 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             return "连续性记录已重置。" if removed else "当前聊天没有连续性记录。"
         if command.action == "pin":
             if len(command.args) < 2:
-                raise CommandParseError("用法：continuity pin <outfit|scene> <id>")
+                raise CommandParseError("用法：连续 固定 服装|场景 <参考图ID>")
             manager.pin(invocation.scope_key, command.args[0], command.args[1])
             return f"已固定 {command.args[0]} 参考图 {command.args[1]}。"
         if command.action == "unpin":
             category = command.args[0] if command.args else None
             manager.unpin(invocation.scope_key, category)
             return "已取消固定参考图。"
-        raise CommandParseError("continuity 支持 show/reset/pin/unpin")
+        raise CommandParseError("连续 支持 查看/重置/固定/取消固定")
 
     def _task_command(self, command: AdminCommand, invocation: InvocationContext) -> str:
         if command.action == "list":
@@ -701,14 +710,14 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 {key: value for key, value in result.items() if key != "content_items"}, ensure_ascii=False
             )
         if not task_id:
-            raise CommandParseError(f"task {command.action} 需要 task_id")
+            raise CommandParseError(f"任务 {command.action} 需要任务 ID")
         if command.action == "retry":
             task = self.service.retry_task(task_id)
             return f"任务已重新排队：{task.id}"
         if command.action == "cancel":
             task = self.service.cancel_task(task_id)
             return f"任务已取消：{task.id}"
-        raise CommandParseError("task 支持 list/show/retry/cancel")
+        raise CommandParseError("任务 支持 列表/查看/重试/取消")
 
     def _doctor_text(self) -> str:
         refs = self.service.gallery.list_assets(limit=10_000)

@@ -58,11 +58,23 @@ class ReferencePrompts:
     """
 
     extract_person: str = (
-        "Create a clean 3x2 person reference sheet from the input image. "
-        "The left column is one front-facing full-body view spanning both rows. "
-        "The four cells on the right show face front, face side, back detail, "
-        "and optional accessories. Preserve identity, proportions, and styling. "
-        "Do not add labels, text, or watermarks."
+        "Create a clean 3x2 face-identity reference sheet from the input image. "
+        "The left column is one front-facing head-and-shoulders portrait spanning both rows. "
+        "The four cells on the right show face front, left profile, right profile, "
+        "and back-of-head / hairline detail. Preserve identity, facial structure, "
+        "hairstyle, skin tone, and apparent age. Do not copy clothing or accessories "
+        "from the source. Use a plain fitted base layer only. Do not add labels, text, "
+        "or watermarks."
+    )
+    generate_person_from_personality: str = (
+        "Create a clean 3x2 face-identity reference sheet from the bot personality "
+        "description only. The left column is one front-facing head-and-shoulders "
+        "portrait spanning both rows. The four cells on the right show face front, "
+        "left profile, right profile, and back-of-head / hairline detail. Infer only "
+        "face, hairstyle, skin tone, and apparent age. Do not invent a full outfit or "
+        "accessories. Use a plain fitted base layer only. Do not add labels, text, or "
+        "watermarks.\nNickname: {nickname}\nPersonality: {personality}\n"
+        "Appearance hint: {appearance_hint}"
     )
     extract_outfit: str = (
         "Extract the outfit from the input image and create a clean 2x2 outfit "
@@ -77,7 +89,9 @@ class ReferencePrompts:
         "and living rooms are eligible; cafes and other public places are not."
     )
     tag_person: str = (
-        'Return only JSON with exactly this schema: {"accessories":[],"appearance_summary":"","confidence":0}'
+        'Return only JSON with exactly this schema: {"appearance_summary":"","confidence":0}. '
+        "appearance_summary must describe only face, hairstyle, skin tone, and apparent age; "
+        "never clothing or accessories."
     )
     tag_outfit: str = (
         "Return only JSON with exactly this schema: "
@@ -93,6 +107,7 @@ class ReferencePrompts:
     def __post_init__(self) -> None:
         for field_name in (
             "extract_person",
+            "generate_person_from_personality",
             "extract_outfit",
             "extract_scene",
             "tag_person",
@@ -150,7 +165,6 @@ class TagValidationResult:
 
 _TAG_FIELDS: dict[ReferenceCategory, tuple[str, ...]] = {
     ReferenceCategory.PERSON: (
-        "accessories",
         "appearance_summary",
         "confidence",
     ),
@@ -172,7 +186,7 @@ _TAG_FIELDS: dict[ReferenceCategory, tuple[str, ...]] = {
 }
 
 _LIST_FIELDS: dict[ReferenceCategory, frozenset[str]] = {
-    ReferenceCategory.PERSON: frozenset({"accessories"}),
+    ReferenceCategory.PERSON: frozenset(),
     ReferenceCategory.OUTFIT: frozenset({"wearing_scenes", "seasons", "styles"}),
     ReferenceCategory.SCENE: frozenset({"lighting"}),
 }
@@ -182,6 +196,19 @@ _TEXT_FIELDS: dict[ReferenceCategory, frozenset[str]] = {
     ReferenceCategory.OUTFIT: frozenset({"type"}),
     ReferenceCategory.SCENE: frozenset({"room_type", "time_of_day", "scene_signature"}),
 }
+
+
+def _normalize_legacy_person_tags(
+    category: ReferenceCategory,
+    value: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Drop the retired person clothing/accessory fields from older assets."""
+
+    if category != ReferenceCategory.PERSON:
+        return value
+    if "accessories" not in value:
+        return value
+    return {key: item for key, item in value.items() if key != "accessories"}
 
 
 def validate_reference_tags(
@@ -200,6 +227,7 @@ def validate_reference_tags(
             errors=("tags must be a JSON object",),
         )
 
+    value = _normalize_legacy_person_tags(category, value)
     expected = set(_TAG_FIELDS[category])
     actual = {key for key in value if isinstance(key, str)}
     errors: list[str] = []
@@ -324,6 +352,47 @@ class ReferenceService:
             source_task_id=source_task_id,
             prompt_version=prompt_version or self._prompt_version("import", self.config.prompts.tagging_for(category)),
             source_kind="admin_import",
+        )
+
+    async def generate_person_from_personality(
+        self,
+        *,
+        name: str,
+        personality: str,
+        nickname: str = "",
+        appearance_hint: str = "",
+        replace_person: bool = False,
+        source_task_id: str | None = None,
+        generation_prompt: str = "",
+        prompt_version: str = "",
+        size: str = "",
+    ) -> ReferenceAsset:
+        """Create a face-only person board from MaiBot personality text."""
+
+        category = self._validate_request(ReferenceCategory.PERSON, name, replace_person)
+        prompt_template = generation_prompt or self.config.prompts.generate_person_from_personality
+        prompt = (
+            prompt_template.replace("{nickname}", nickname.strip() or "bot")
+            .replace("{personality}", personality.strip())
+            .replace("{appearance_hint}", appearance_hint.strip() or "无")
+        )
+        generated = await self._generate_reference(
+            None,
+            prompt=prompt,
+            size=size,
+        )
+        reference_result = await self._compress(generated.data)
+        return await self._persist_new(
+            category=category,
+            name=name,
+            source_result=reference_result,
+            reference_result=reference_result,
+            replace_person=replace_person,
+            manual_tags=None,
+            source_task_id=source_task_id,
+            prompt_version=prompt_version or self._prompt_version("personality", prompt),
+            source_kind="personality_generate",
+            provider_media_type=generated.media_type,
         )
 
     async def extract_reference(
@@ -470,7 +539,7 @@ class ReferenceService:
 
     async def _generate_reference(
         self,
-        source_bytes: bytes,
+        source_bytes: bytes | None,
         *,
         prompt: str,
         size: str,
@@ -480,9 +549,10 @@ class ReferenceService:
         if self.provider is None:
             raise ReferenceGenerationError("reference image provider is not configured")
         kwargs: dict[str, Any] = {
-            "images": [source_bytes],
             "extraction": True,
         }
+        if source_bytes is not None:
+            kwargs["images"] = [source_bytes]
         if self.config.reference_model:
             kwargs["model"] = self.config.reference_model
         if self.config.reference_mode:

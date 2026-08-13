@@ -417,11 +417,12 @@ class PromptSection(PluginConfigBase):
         ),
     )
     person_prompt: str = Field(
-        default="保持同一位成年人物的稳定身份特征，五官、发型、体型和肤色自然一致，像真实手机照片里的同一个人",
+        default="保持同一位成年人物的稳定身份特征，只描述五官、发型、肤色、年龄感和面部轮廓，不要描述服装或配饰",
         description="无人物参考图时使用的人物描述",
         json_schema_extra=_prompt_ui(
             "人物文字描述",
-            "人物参考关闭或未使用人物参考板时的人物身份与外观描述；会填入「人物文字回退模板」的 {person_prompt}。",
+            "人物参考关闭或未使用人物参考板时的面部与身份描述；不要写服装。"
+            "会填入「人物文字回退模板」的 {person_prompt}。",
         ),
     )
     person_fallback_prompt: str = Field(
@@ -455,14 +456,33 @@ class PromptSection(PluginConfigBase):
 
     extract_person: str = Field(
         default=(
-            "将输入人物图整理为 3×2 人物参考板：左列为纵向占两格的正面全身图，"
-            "右侧四格依次为脸部正面、侧面、背面特写和可选配饰示意。"
-            "保持同一人物身份、发型、体型和服装，不加入文字水印。"
+            "将输入人物图整理为 3×2 面部身份参考板：左列为纵向占两格的正面头肩特写，"
+            "右侧四格依次为脸部正面、左侧、右侧和背面发际/后脑特写。"
+            "只保留同一人物的五官、发型、肤色、年龄感和面部轮廓；"
+            "不要画出完整服装，不要根据原图复制上衣、裙子、外套或配饰。"
+            "中性贴身打底即可，不加入文字水印。"
         ),
         description="人物参考提取提示词",
         json_schema_extra=_prompt_ui(
             "人物参考板提取提示词",
-            "将管理员上传的人物图整理为 3×2 多角度人物参考板。",
+            "将管理员上传的人物图整理为聚焦面部的 3×2 身份参考板；不要保留服装。",
+        ),
+    )
+    generate_person_from_personality: str = Field(
+        default=(
+            "根据以下 bot 人格与身份设定，生成一张 3×2 面部身份参考板："
+            "左列为纵向占两格的正面头肩特写，右侧四格依次为脸部正面、左侧、右侧和背面发际/后脑特写。"
+            "只根据设定推断五官、发型、肤色、年龄感和面部轮廓；"
+            "不要画出完整服装或配饰，中性贴身打底即可，不加入文字水印。\n"
+            "昵称：{nickname}\n人格设定：{personality}\n外貌补充：{appearance_hint}"
+        ),
+        description="按人格设定生成人物参考板提示词",
+        json_schema_extra=_prompt_ui(
+            "按人格生成人物参考板提示词",
+            "没有人物参考图时，根据 MaiBot 人格设定无原图生成面部身份参考板。",
+            "{nickname} MaiBot 机器人昵称；"
+            "{personality} MaiBot 人格设定全文；"
+            "{appearance_hint} 管理员可选的不含服装的外貌补充。",
         ),
     )
     extract_outfit: str = Field(
@@ -492,14 +512,15 @@ class PromptSection(PluginConfigBase):
         default="".join(
             (
                 "请分析人物参考板并只输出符合 Schema 的 JSON：",
-                '{{"accessories":[],"appearance_summary":"","confidence":0}}。',
+                '{{"appearance_summary":"","confidence":0}}。',
+                "appearance_summary 只写五官、发型、肤色、年龄感和面部轮廓，禁止出现服装、上衣、裙子、外套或配饰。"
                 "confidence 必须是 0 到 1 之间的小数，禁止使用 0 到 100 的百分制。",
             )
         ),
         description="人物标签提示词",
         json_schema_extra=_prompt_ui(
             "人物自动标签提示词",
-            "视觉模型分析人物参考板时使用；必须要求模型仅返回符合约定 Schema 的 JSON。",
+            "视觉模型分析人物参考板时使用；只描述面部与身份，不要写服装。必须仅返回约定 Schema 的 JSON。",
         ),
     )
     tag_outfit: str = Field(
@@ -733,11 +754,11 @@ class PromptSection(PluginConfigBase):
         ),
     )
     generate_photo_accessory_hint: str = Field(
-        default="发饰、眼镜、包、手持物等配饰",
+        default="包、手持物等物件；不要用来描述服装，服装只走 outfit_hint 或服装参考图",
         description="含人物写真工具 accessory_hint 参数说明",
         json_schema_extra=_tool_text_ui(
             "含人物写真工具 · 参数 accessory_hint",
-            "对应工具参数 accessory_hint。",
+            "对应工具参数 accessory_hint。只描述手持物或随身物件，不要写服装。",
             rows=2,
         ),
     )
@@ -887,11 +908,11 @@ class PromptSection(PluginConfigBase):
         ),
     )
     gallery_source_message_id: str = Field(
-        default="包含唯一一张图片的当前或引用消息 ID",
+        default="通常留空。优先使用当前消息、引用消息或本聊天最近一张单图，不要让用户填写消息 ID",
         description="图库管理工具 source_message_id 参数说明",
         json_schema_extra=_tool_text_ui(
             "图库管理工具 · 参数 source_message_id",
-            "对应工具参数 source_message_id。",
+            "对应工具参数 source_message_id。管理员命令不依赖此参数。",
             rows=2,
         ),
     )

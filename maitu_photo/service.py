@@ -476,9 +476,12 @@ class PhotoStudioService:
         manual_tags: Mapping[str, Any] | None = None,
         parent_task_id: str | None = None,
         automatic: bool = False,
+        personality: str = "",
+        nickname: str = "",
+        appearance_hint: str = "",
     ) -> ImageTask:
         operation = operation.strip().casefold()
-        if operation not in {"extract", "import", "retag", "regenerate", "replace"}:
+        if operation not in {"extract", "import", "retag", "regenerate", "replace", "generate_person"}:
             raise ValueError(f"不支持的参考图任务: {operation}")
         category_value = ReferenceCategory(category).value if category is not None else ""
         task = self._new_task(
@@ -499,6 +502,9 @@ class PhotoStudioService:
             "asset_id": asset_id.strip(),
             "manual_tags": dict(manual_tags or {}),
             "automatic": bool(automatic),
+            "personality": personality.strip(),
+            "nickname": nickname.strip(),
+            "appearance_hint": appearance_hint.strip(),
         }
         try:
             if image is not None:
@@ -840,11 +846,12 @@ class PhotoStudioService:
         if selection.scene is not None:
             references.append(selection.scene.reference_path.read_bytes())
         person_prompt = self._person_prompt(person)
-        outfit_prompt = self._outfit_prompt(selection.outfit, str(payload.get("outfit_hint") or ""))
+        outfit_prompt = self._outfit_prompt(
+            selection.outfit,
+            str(payload.get("outfit_hint") or ""),
+            str(payload.get("accessory_hint") or ""),
+        )
         scene_prompt = self._scene_prompt(selection.scene, str(payload.get("scene_hint") or ""))
-        accessory_hint = str(payload.get("accessory_hint") or "").strip()
-        if accessory_hint:
-            person_prompt = f"{person_prompt}\n配饰要求：{accessory_hint}"
         reference_labels = json.dumps(
             {
                 "person": _reference_label(person),
@@ -1027,9 +1034,24 @@ class PhotoStudioService:
         # Import and retag only need the MaiBot tagging model.  Avoid forcing
         # an OpenAI image provider for already-prepared uploads, so gallery
         # maintenance remains usable before generation credentials are set.
-        service = self._reference_service(require_provider=operation in {"extract", "regenerate"})
+        service = self._reference_service(require_provider=operation in {"extract", "regenerate", "generate_person"})
         asset: ReferenceAsset
-        if operation in {"extract", "import", "replace"}:
+        if operation == "generate_person":
+            personality = str(payload.get("personality") or "").strip()
+            if not personality:
+                personality = await self._host_personality_text()
+            if not personality:
+                raise PhotoStudioError("未能读取 MaiBot 人格设定，无法生成人物参考图")
+            asset = await service.generate_person_from_personality(
+                name=str(payload.get("name") or "人物参考"),
+                personality=personality,
+                nickname=str(payload.get("nickname") or "").strip(),
+                appearance_hint=str(payload.get("appearance_hint") or "").strip(),
+                replace_person=False,
+                source_task_id=task.id,
+                generation_prompt=self.config.prompts.generate_person_from_personality,
+            )
+        elif operation in {"extract", "import", "replace"}:
             if category is None:
                 raise ValueError("参考图任务缺少 category")
             source = self.payloads.get_upload(task.id)
@@ -1095,6 +1117,7 @@ class PhotoStudioService:
         )
         prompts = ReferencePrompts(
             extract_person=self.config.prompts.extract_person,
+            generate_person_from_personality=self.config.prompts.generate_person_from_personality,
             extract_outfit=self.config.prompts.extract_outfit,
             extract_scene=self.config.prompts.extract_scene,
             tag_person=self.prompts.render("tag_person"),
@@ -1258,18 +1281,30 @@ class PhotoStudioService:
 
     def _person_prompt(self, person: ReferenceAsset | None) -> str:
         if person is not None:
-            return f"严格保持人物参考图身份一致。标签：{json.dumps(person.effective_tags, ensure_ascii=False)}"
+            tags = _person_identity_tags(person.effective_tags)
+            return (
+                "严格保持人物参考图的面部与身份一致，不要根据人物参考图推断或复制服装。"
+                f"面部标签：{json.dumps(tags, ensure_ascii=False)}"
+            )
         return self.prompts.render(
             "person_fallback_prompt",
             person_prompt=self.config.prompts.person_prompt,
         )
 
-    def _outfit_prompt(self, outfit: ReferenceAsset | None, hint: str) -> str:
+    def _outfit_prompt(self, outfit: ReferenceAsset | None, hint: str, accessory_hint: str = "") -> str:
         if outfit is not None:
-            base = f"严格保持服装参考图一致。标签：{json.dumps(outfit.effective_tags, ensure_ascii=False)}"
+            base = (
+                "服装完全由服装参考图控制，不要使用人物参考图中的衣服。"
+                f"标签：{json.dumps(outfit.effective_tags, ensure_ascii=False)}"
+            )
         else:
             base = self.config.prompts.clothing_style_prompt
-        return f"{base}\n用户服装提示：{hint}" if hint else base
+        extras: list[str] = []
+        if hint:
+            extras.append(f"用户服装提示：{hint}")
+        if accessory_hint:
+            extras.append(f"手持物或随身物件：{accessory_hint}")
+        return "\n".join([base, *extras]) if extras else base
 
     def _scene_prompt(self, scene: ReferenceAsset | None, hint: str) -> str:
         if scene is not None:
@@ -1340,6 +1375,20 @@ class PhotoStudioService:
             )
         return person
 
+    async def load_host_identity(self) -> tuple[str, str]:
+        """Read MaiBot nickname and personality from host config."""
+
+        getter = getattr(getattr(self.ctx, "config", None), "get", None)
+        if getter is None:
+            return "", ""
+        nickname = str(await getter("bot.nickname", "") or "").strip()
+        personality = str(await getter("personality.personality", "") or "").strip()
+        return nickname, personality
+
+    async def _host_personality_text(self) -> str:
+        nickname, personality = await self.load_host_identity()
+        return "\n".join(part for part in (nickname, personality) if part)
+
     def _startup_reference_scan_pending(self) -> bool:
         task = self._reference_scan_task
         return task is not None and not task.done()
@@ -1354,10 +1403,22 @@ def _optional_bool(value: Any, default: bool) -> bool:
     return default if value is None else bool(value)
 
 
+def _person_identity_tags(tags: Mapping[str, Any] | None) -> dict[str, Any]:
+    result = dict(tags or {})
+    result.pop("accessories", None)
+    summary = str(result.get("appearance_summary") or "").strip()
+    if summary:
+        result["appearance_summary"] = summary
+    return result
+
+
 def _reference_label(asset: ReferenceAsset | None) -> dict[str, Any] | None:
     if asset is None:
         return None
-    return {"id": asset.id, "name": asset.name, "tags": asset.effective_tags}
+    tags = asset.effective_tags
+    if asset.category == ReferenceCategory.PERSON:
+        tags = _person_identity_tags(tags)
+    return {"id": asset.id, "name": asset.name, "tags": tags}
 
 
 def _mapping(value: Any) -> dict[str, Any]:

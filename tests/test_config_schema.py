@@ -24,7 +24,7 @@ def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     schema = generate_plugin_config_schema(PhotoPluginConfig)
     fields = [field for section in schema["sections"].values() for field in section["fields"].values()]
 
-    assert len(fields) == 94
+    assert len(fields) == 95
     for field in fields:
         assert _CHINESE_TEXT.search(field["label"]), field["name"]
         assert _CHINESE_TEXT.search(field["description"]), field["name"]

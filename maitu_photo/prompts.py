@@ -62,6 +62,9 @@ class PromptService:
             "scene_signature",
             "selected_tags",
             "source_summary",
+            "nickname",
+            "personality",
+            "appearance_hint",
         }
         return render_prompt(template, allowed, **values)
 

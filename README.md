@@ -7,7 +7,7 @@
 - OpenAI 兼容接口支持 Images API 与 Chat Completions 两种模式，不会在失败后跨模式重试。
 - `generate_photo` 用于 bot 本人出镜的生活照。人物参考全局唯一；配置开启人物参考时，写真任务必须使用已启用的人物参考板且人物始终是第一张参考图；配置关闭后改为文字人物描述。
 - `generate_scene_photo` 用于不含 bot 本人的环境/景物/物品照片，不传人物和服装参考，仅可按需使用场景参考。
-- 人物为 3×2 多角度参考板，服装与场景为 2×2 参考板，场景第四格为平面图。
+- 人物为 3×2 面部身份参考板，不描述、不复制服装；服装与场景为 2×2 参考板，场景第四格为平面图。服装完全由服装参考图控制。
 - 场景参考只用于模型判定合格的室内私密小空间。默认提示词允许卧室、浴室、客厅，不允许咖啡店和公共空间。
 - 照片连续性按群聊隔离；私聊使用聊天流隔离。默认同一自然日、同一场景且 12 小时内复用服装。
 - 所有参考图统一转为去元数据 JPEG，最长边默认 2048px，硬目标 480,000 bytes，配置绝不允许超过 500,000 bytes。
@@ -55,23 +55,68 @@ API Key 只从插件运行时配置读取。`doctor` 仅显示是否已配置，
 
 ## 管理员命令
 
-默认前缀为 `/maitu`，前缀修改后需要重载插件才能更新 Command 注册信息。
+默认前缀为 `/maitu`，只有 `plugin.admin_user_ids` 中的用户可执行。修改前缀后需要重载插件才能更新 Command 注册信息。
+
+### 帮助与诊断
 
 ```text
-/maitu person extract|import|show|regenerate|clear
-/maitu ref extract|import <outfit|scene> [name=名称]
-/maitu ref list [outfit|scene]
-/maitu ref show <id>
-/maitu ref edit <id> [name=名称] [tags='{"styles":["casual"]}']
-/maitu ref retag|regenerate|replace|enable|disable <id>
-/maitu ref delete <id> [confirm_token=令牌]
-/maitu continuity show|reset|pin|unpin [outfit|scene] [id]
-/maitu task list|show|retry|cancel [task_id]
-/maitu doctor
-/maitu help
+/maitu 帮助
+/maitu 诊断
 ```
 
-`extract` 从当前或引用消息的唯一图片生成多角度参考板；`import` 直接导入已经处理好的参考板。所有上传仍会强制压缩。删除与人物清空需要使用五分钟有效的二次确认令牌。
+### 人物参考
+
+人物参考板只保留面部与身份，不描述、不复制服装。服装完全由服装参考图控制。
+
+```text
+/maitu 人物 查看
+/maitu 人物 提取
+/maitu 人物 导入
+/maitu 人物 生成
+/maitu 人物 生成 补充=短发圆脸
+/maitu 人物 重生成
+/maitu 人物 清空
+```
+
+- `人物 提取`：从当前消息、引用消息或本聊天最近一张单图，整理成 3×2 面部参考板。
+- `人物 导入`：直接导入已经处理好的面部参考板。
+- `人物 生成`：当前没有人物参考时，读取 MaiBot 的人格设定，无原图生成面部参考板。可用 `补充=` 追加不含服装的外貌说明。
+- `人物 清空`：首次返回五分钟有效确认令牌，再次执行才真正清空。
+
+### 服装与场景参考
+
+```text
+/maitu 参考 提取 服装 [名称=夏天裙子]
+/maitu 参考 导入 场景 [名称=卧室]
+/maitu 参考 列表 [服装|场景]
+/maitu 参考 查看 <参考图ID>
+/maitu 参考 编辑 <参考图ID> [名称=名称] [标签='{"styles":["casual"]}']
+/maitu 参考 重标|重生成|替换|启用|停用 <参考图ID>
+/maitu 参考 删除 <参考图ID>
+```
+
+### 连续性与任务
+
+```text
+/maitu 连续 查看
+/maitu 连续 重置
+/maitu 连续 固定 服装|场景 <参考图ID>
+/maitu 连续 取消固定 [服装|场景]
+/maitu 任务 列表
+/maitu 任务 查看 [任务ID]
+/maitu 任务 重试 <任务ID>
+/maitu 任务 取消 <任务ID>
+```
+
+### 如何导入图片
+
+不要填写消息 ID。任选下面一种方式即可：
+
+1. 把图片和命令发在同一条消息里。
+2. 回复或引用一条只含单张图片的消息，再发命令。
+3. 先单独发一张图，再发命令；插件会使用本聊天最近的一张单图。
+
+所有上传仍会强制压缩。删除与人物清空需要五分钟有效的二次确认令牌。英语旧命令（如 `person extract`）仍然可用。
 
 ## 运行数据与参考图目录
 

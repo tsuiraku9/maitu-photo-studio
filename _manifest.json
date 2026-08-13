@@ -31,6 +31,8 @@
     "send.text",
     "send.image",
     "message.get_by_id",
+    "message.get_recent",
+    "config.get",
     "llm.generate",
     "maisaka.context.append",
     "maisaka.proactive.trigger"

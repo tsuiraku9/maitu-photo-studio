@@ -287,7 +287,7 @@ def test_photo_submission_requires_active_person_reference(tmp_path: Path) -> No
             tmp_path,
             ReferenceCategory.PERSON,
             _png("red"),
-            {"accessories": [], "appearance_summary": "adult with dark hair", "confidence": 1.0},
+            {"appearance_summary": "adult with dark hair", "confidence": 1.0},
         )
         service.gallery.mark_needs_review(person_id)
         with pytest.raises(PhotoStudioError, match="needs_review"):
@@ -308,7 +308,7 @@ def test_photo_submission_rejects_person_reference_opt_out_when_enabled(tmp_path
             tmp_path,
             ReferenceCategory.PERSON,
             _png("red"),
-            {"accessories": [], "appearance_summary": "adult with dark hair", "confidence": 1.0},
+            {"appearance_summary": "adult with dark hair", "confidence": 1.0},
         )
 
         with pytest.raises(PhotoStudioError, match="use_person_reference 不能关闭"):
@@ -432,7 +432,7 @@ def test_photo_reference_order_and_same_scene_outfit_continuity(tmp_path: Path) 
             tmp_path,
             ReferenceCategory.PERSON,
             person_bytes,
-            {"accessories": [], "appearance_summary": "adult with dark hair", "confidence": 1.0},
+            {"appearance_summary": "adult with dark hair", "confidence": 1.0},
         )
         outfit_id = _add_reference(
             service,
@@ -523,7 +523,7 @@ def test_photo_prefers_recently_used_outfit_when_candidates_tie(tmp_path: Path) 
             tmp_path,
             ReferenceCategory.PERSON,
             person_bytes,
-            {"accessories": [], "appearance_summary": "adult with dark hair", "confidence": 1.0},
+            {"appearance_summary": "adult with dark hair", "confidence": 1.0},
         )
 
         recent_source = tmp_path / "recent-outfit-source.png"

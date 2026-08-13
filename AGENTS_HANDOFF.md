@@ -143,23 +143,20 @@ maitu.photo-studio/
 
 ## 6. 管理员命令
 
-默认前缀 `/maitu`，只有 `plugin.admin_user_ids` 中的用户可执行：
+默认前缀 `/maitu`，只有 `plugin.admin_user_ids` 中的用户可执行。面向用户的命令使用中文；英语旧命令仍然可解析。
 
 ```text
-/maitu person extract|import|show|regenerate|clear
-/maitu ref extract|import <outfit|scene> [name=名称]
-/maitu ref list [outfit|scene]
-/maitu ref show <id>
-/maitu ref edit <id> [name=名称] [tags='{"styles":["casual"]}']
-/maitu ref retag|regenerate|replace|enable|disable <id>
-/maitu ref delete <id> [confirm_token=令牌]
-/maitu continuity show|reset|pin|unpin [outfit|scene] [id]
-/maitu task list|show|retry|cancel [task_id]
-/maitu doctor
-/maitu help
+/maitu 帮助
+/maitu 诊断
+/maitu 人物 查看|提取|导入|生成|重生成|清空
+/maitu 参考 提取|导入 服装|场景 [名称=名称]
+/maitu 参考 列表 [服装|场景]
+/maitu 参考 查看|编辑|重标|重生成|替换|启用|停用|删除 <id>
+/maitu 连续 查看|重置|固定|取消固定 [服装|场景] [id]
+/maitu 任务 列表|查看|重试|取消 [任务ID]
 ```
 
-危险操作 `person clear` 和 `ref delete` 首次调用会返回五分钟有效确认令牌；不要把令牌写入交接记录或日志。
+`人物 生成` 仅在尚无人物参考时可用，会读取宿主 `personality.personality` 和 `bot.nickname` 无原图生成面部参考板。导入图片不要使用消息 ID：当前消息单图、回复/引用单图，或本聊天最近一张单图均可。危险操作 `人物 清空` 和 `参考 删除` 首次调用会返回五分钟有效确认令牌；不要把令牌写入交接记录或日志。
 
 ## 7. 配置要点
 

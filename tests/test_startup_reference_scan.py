@@ -31,7 +31,6 @@ def _outfit_tags() -> dict[str, object]:
 
 def _person_tags() -> dict[str, object]:
     return {
-        "accessories": [],
         "appearance_summary": "short dark hair",
         "confidence": 0.9,
     }

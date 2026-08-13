@@ -78,32 +78,27 @@ async def resolve_single_image(
     *,
     source_message_id: str = "",
 ) -> bytes:
-    """Load exactly one uploaded image from an explicit/current/replied message."""
+    """Load exactly one image from the current, replied, or recent chat message."""
 
-    explicit_id = str(source_message_id or "").strip()
     current_images = extract_message_images(invocation.message)
-    if explicit_id:
-        message = await ctx.message.get_by_id(
-            explicit_id,
-            stream_id=invocation.stream_id,
-            include_binary_data=True,
-        )
-        return _require_single_image(message, explicit_id)
     if current_images:
         if len(current_images) != 1:
             raise ImageInputError("每次只能上传一张图片")
         return current_images[0]
 
     reply_id = _reply_message_id(invocation.message)
-    target_id = reply_id or invocation.message_id
-    if not target_id:
-        raise ImageInputError("请在当前消息上传一张图片，或引用一条含单张图片的消息")
-    message = await ctx.message.get_by_id(
-        target_id,
-        stream_id=invocation.stream_id,
-        include_binary_data=True,
-    )
-    return _require_single_image(message, target_id)
+    if reply_id:
+        return await _image_from_message_id(ctx, invocation, reply_id)
+
+    recent = await _recent_unique_image(ctx, invocation)
+    if recent:
+        return recent
+
+    explicit_id = str(source_message_id or "").strip()
+    if explicit_id:
+        return await _image_from_message_id(ctx, invocation, explicit_id)
+
+    raise ImageInputError("请把图片和命令发在同一条消息，或先回复/引用一张只含单图的消息，也可以先单独发一张图再发命令")
 
 
 def extract_message_images(message: Any) -> list[bytes]:
@@ -132,6 +127,66 @@ def extract_message_images(message: Any) -> list[bytes]:
         if encoded:
             images.append(_decode_image_base64(encoded))
     return images
+
+
+async def _image_from_message_id(ctx: Any, invocation: InvocationContext, message_id: str) -> bytes:
+    getter = getattr(getattr(ctx, "message", None), "get_by_id", None)
+    if getter is None:
+        raise ImageInputError("当前环境无法读取引用消息中的图片")
+    message = await getter(
+        message_id,
+        stream_id=invocation.stream_id,
+        include_binary_data=True,
+    )
+    return _require_single_image(_unwrap_message(message), message_id)
+
+
+async def _recent_unique_image(ctx: Any, invocation: InvocationContext) -> bytes | None:
+    if not invocation.stream_id:
+        return None
+    caller = getattr(ctx, "call_capability", None)
+    getter = getattr(getattr(ctx, "message", None), "get_recent", None)
+    if caller is None and getter is None:
+        return None
+    try:
+        if caller is not None:
+            payload = await caller(
+                "message.get_recent",
+                chat_id=invocation.stream_id,
+                limit=20,
+                include_binary_data=True,
+            )
+        else:
+            payload = await getter(invocation.stream_id, limit=20)
+    except Exception:
+        return None
+    messages = _unwrap_messages(payload)
+    for message in reversed(messages):
+        if not isinstance(message, Mapping):
+            continue
+        current_id = _first_text(message.get("message_id"), message.get("id"))
+        if current_id and current_id == invocation.message_id:
+            continue
+        images = extract_message_images(message)
+        if len(images) == 1:
+            return images[0]
+    return None
+
+
+def _unwrap_message(value: Any) -> Any:
+    if isinstance(value, Mapping) and "message" in value and isinstance(value.get("message"), Mapping):
+        return value["message"]
+    return value
+
+
+def _unwrap_messages(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, Mapping):
+        messages = value.get("messages")
+        if isinstance(messages, list):
+            return messages
+    return []
 
 
 def _require_single_image(message: Any, message_id: str) -> bytes:

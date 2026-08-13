@@ -42,7 +42,6 @@ def _image(
 def _tags(category: ReferenceCategory) -> dict[str, Any]:
     if category == ReferenceCategory.PERSON:
         return {
-            "accessories": ["silver hair clip"],
             "appearance_summary": "dark shoulder-length hair",
             "confidence": 0.92,
         }
@@ -181,6 +180,32 @@ def test_tag_schema_is_exact_and_scene_privacy_is_not_selectable() -> None:
     assert scene.schema_valid is True
     assert scene.selectable is False
     assert scene.error_code == "scene_not_private"
+
+    person = validate_reference_tags("person", _tags(ReferenceCategory.PERSON))
+    assert person.schema_valid is True
+    assert "accessories" not in person.tags
+
+
+def test_generate_person_from_personality_does_not_send_source_image(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    llm = FakeLLM([_tags(ReferenceCategory.PERSON)])
+    storage, gallery, service = _service(tmp_path, provider=provider, llm=llm)
+
+    asset = _run(
+        service.generate_person_from_personality(
+            name="persona",
+            personality="大二女生，短发，圆脸",
+            nickname="bot",
+            appearance_hint="自然刘海",
+        )
+    )
+
+    assert asset.status.value == "active"
+    assert gallery.get_person() is not None
+    assert "images" not in provider.calls[0][1]
+    assert "大二女生" in provider.calls[0][0]
+    assert "自然刘海" in provider.calls[0][0]
+    storage.close()
 
 
 def test_private_scene_false_and_llm_failure_are_saved_for_review(
