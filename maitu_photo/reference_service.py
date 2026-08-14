@@ -28,7 +28,7 @@ from .compression import (
 from .gallery import DuplicateReferenceError, ReferenceGallery
 from .llm_adapter import MaiBotLLMAdapter
 from .models import AssetStatus, ReferenceAsset, ReferenceCategory
-from .provider import GeneratedImage, OpenAICompatibleProvider
+from .provider import GeneratedImage, OpenAICompatibleProvider, ProviderError
 
 MAX_REFERENCE_TARGET_BYTES = 480_000
 
@@ -565,6 +565,14 @@ class ReferenceService:
             self._before_provider_request()
         try:
             return await self.provider.generate(prompt, **kwargs)
+        except ProviderError as exc:
+            # ProviderError messages are already redacted.  Preserve only the
+            # stable category/status so task logs remain actionable without
+            # echoing a gateway response that could contain credentials.
+            detail = exc.code
+            if exc.status_code is not None:
+                detail = f"{detail}/http_{exc.status_code}"
+            raise ReferenceGenerationError(f"reference image generation failed ({detail})") from None
         except Exception:  # noqa: BLE001 - provider implementations are injected
             # Do not propagate compatible-provider response text: some gateways
             # echo request headers or credentials in non-standard errors.

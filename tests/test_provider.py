@@ -123,6 +123,34 @@ def test_images_generation_uses_expected_endpoint_and_parses_b64_json() -> None:
     }
 
 
+def test_gpt_image_generation_omits_legacy_response_format() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["json"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(_png()).decode()}]},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="gpt-image-2",
+                client=client,
+            )
+            return await provider.generate("a portrait")
+
+    _run(scenario())
+
+    payload = seen["json"]
+    assert isinstance(payload, dict)
+    assert payload == {"model": "gpt-image-2", "prompt": "a portrait", "n": 1}
+
+
 def test_provider_response_stops_when_stream_exceeds_size_limit() -> None:
     stream = _ChunkStream([b'{"data":[', b"x" * 256])
 
@@ -172,7 +200,7 @@ def test_images_edit_preserves_reference_order_in_multipart_body() -> None:
             provider = OpenAICompatibleProvider(
                 "https://api.example.test/v1/",
                 "test-key-value",
-                generation_model="edit-model",
+                generation_model="gpt-image-2",
                 client=client,
             )
             return await provider.edit_image("keep identity", [first, second])
@@ -184,7 +212,8 @@ def test_images_edit_preserves_reference_order_in_multipart_body() -> None:
     assert seen["url"] == "https://api.example.test/v1/images/edits"
     assert str(seen["content_type"]).startswith("multipart/form-data; boundary=")
     assert body.find(first) < body.find(second)
-    assert body.count(b'name="image"') == 2
+    assert body.count(b'name="image[]"') == 2
+    assert b'name="response_format"' not in body
     assert b"reference-0.jpeg" in body
     assert b"reference-1.jpeg" in body
 
@@ -271,6 +300,41 @@ def test_remote_url_result_is_downloaded_without_forwarding_provider_secret(
     assert result.data == image
     assert result.source_url == "https://cdn.example.test/generated.png"
     assert seen_authorization == [""]
+
+
+def test_same_origin_url_result_keeps_provider_authorization() -> None:
+    image = _png()
+    seen_authorization: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://api.example.test/v1/generated.png"}]},
+                request=request,
+            )
+        seen_authorization.append(request.headers.get("authorization"))
+        return httpx.Response(
+            200,
+            content=image,
+            headers={"content-type": "image/png"},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    result = _run(scenario())
+
+    assert result.data == image
+    assert seen_authorization == ["Bearer test-key-value"]
 
 
 @pytest.mark.parametrize(

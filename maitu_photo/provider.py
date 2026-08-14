@@ -486,6 +486,18 @@ class OpenAICompatibleProvider:
             raise ProviderConfigError("image model is not configured")
         return selected
 
+    @staticmethod
+    def _uses_native_gpt_image_output(model: str) -> bool:
+        """Return whether the model uses GPT Image's native base64 output.
+
+        GPT Image models return base64 image data by default and do not use the
+        legacy DALL-E ``response_format`` request field.  Omitting that field
+        keeps strict OpenAI-compatible gateways from rejecting otherwise valid
+        image requests.
+        """
+
+        return model.strip().casefold().startswith("gpt-image-")
+
     async def _post_json(self, endpoint: str, payload: Mapping[str, Any]) -> httpx.Response:
         try:
             async with self.client.stream(
@@ -592,14 +604,22 @@ class OpenAICompatibleProvider:
                 current_url,
                 allowed_origin=self._base_origin,
             )
+            same_configured_origin = self._base_origin == _url_origin(current_url)
+            download_headers = {"Accept": "image/*"}
+            if same_configured_origin and self.api_key:
+                # Some compatible gateways return a protected image URL on
+                # their own origin after the generation request.  Keep the
+                # credential scoped to that explicitly configured origin.
+                download_headers["Authorization"] = f"Bearer {self.api_key}"
+            else:
+                # Never forward provider credentials to a third-party image
+                # host, including after a redirect.
+                download_headers["Authorization"] = ""
             try:
-                # Do not forward the provider's Authorization header to a third
-                # party image host.  An explicit empty value overrides client-level
-                # defaults while preserving MockTransport compatibility in tests.
                 async with self.client.stream(
                     "GET",
                     current_url,
-                    headers={"Accept": "image/*", "Authorization": ""},
+                    headers=download_headers,
                     timeout=self.timeout,
                     follow_redirects=False,
                 ) as response:
@@ -915,7 +935,7 @@ class OpenAICompatibleProvider:
             # gateways; preserving it as a separate field lets those gateways
             # apply their own semantics instead of silently dropping it.
             payload["negative_prompt"] = negative_prompt
-        if response_format:
+        if response_format and not self._uses_native_gpt_image_output(model):
             payload["response_format"] = response_format
         if extra:
             payload.update(dict(extra))
@@ -941,13 +961,15 @@ class OpenAICompatibleProvider:
             extension = media.split("/", 1)[-1] if "/" in media else "jpeg"
             if extension == "jpg":
                 extension = "jpeg"
-            files.append(("image", (f"reference-{index}.{extension}", data, media)))
+            # The Image API exposes the input as an array field.  The
+            # bracketed name is required by strict OpenAI-compatible gateways.
+            files.append(("image[]", (f"reference-{index}.{extension}", data, media)))
         fields: dict[str, Any] = {"model": model, "prompt": prompt, "n": str(n)}
         if size:
             fields["size"] = size
         if negative_prompt:
             fields["negative_prompt"] = negative_prompt
-        if response_format:
+        if response_format and not self._uses_native_gpt_image_output(model):
             fields["response_format"] = response_format
         if extra:
             fields.update(dict(extra))

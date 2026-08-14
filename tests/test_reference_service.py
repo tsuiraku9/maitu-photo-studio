@@ -12,7 +12,7 @@ from PIL import Image
 from maitu_photo.compression import CompressionConfig
 from maitu_photo.gallery import DuplicateReferenceError, ReferenceGallery
 from maitu_photo.models import AssetStatus, ReferenceCategory
-from maitu_photo.provider import GeneratedImage
+from maitu_photo.provider import GeneratedImage, ProviderImageDecodeError
 from maitu_photo.reference_service import (
     ReferenceGenerationError,
     ReferencePrompts,
@@ -88,6 +88,11 @@ class FakeLLM:
 class FailingProvider:
     async def generate(self, prompt: str, **kwargs: Any) -> GeneratedImage:
         raise RuntimeError("Bearer sk-sensitive-compatible-provider-key")
+
+
+class ProviderDecodeFailingProvider:
+    async def generate(self, prompt: str, **kwargs: Any) -> GeneratedImage:
+        raise ProviderImageDecodeError("provider returned a protected image URL")
 
 
 def _run(coro):
@@ -365,6 +370,19 @@ def test_extraction_error_does_not_expose_provider_response(tmp_path: Path) -> N
 
     assert "sensitive-compatible-provider-key" not in str(caught.value)
     assert list((tmp_path / "plugin-data").rglob("*.jpg")) == []
+    storage.close()
+
+
+def test_extraction_error_preserves_safe_provider_category(tmp_path: Path) -> None:
+    storage, _, service = _service(
+        tmp_path,
+        provider=ProviderDecodeFailingProvider(),  # type: ignore[arg-type]
+        llm=FakeLLM([_tags(ReferenceCategory.OUTFIT)]),
+    )
+
+    with pytest.raises(ReferenceGenerationError, match=r"provider_image_decode"):
+        _run(service.extract_reference("outfit", _image(), name="dress"))
+
     storage.close()
 
 
