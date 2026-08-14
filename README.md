@@ -129,12 +129,6 @@ MaiBot 运行环境若未预装依赖，可执行：
 python -m pip install -r requirements.txt
 ```
 
-本地开发与测试可安装开发依赖：
-
-```powershell
-python -m pip install -e ".[dev]"
-```
-
 ## 首次使用
 
 1. 在 MaiBot 加载或重载插件，然后打开 WebUI 的 `麦麦写真` 配置页。
@@ -168,7 +162,7 @@ python -m pip install -e ".[dev]"
    你可以调用generate_scene_photo和generate_photo工具生成照片
    ```
 
-   这只是提升自动调用效果的本地行为建议；不添加也不影响插件安装、配置或手动调用。根据画面是否包含 bot 本人选择工具，并避免对同一需求重复调用。`bot_config.toml` 是本地运行配置，不要提交到 Git；本仓库不跟踪这份文件。
+   这只是提升自动调用效果的本地行为建议；不添加也不影响插件安装、配置或手动调用。根据画面是否包含 bot 本人选择工具，并避免对同一需求重复调用。`bot_config.toml` 是 MaiBot 的运行配置，不要提交到 Git。
 8. 让 Planner 调用对应工具，并使用返回的 `task_id` 查询进度。图片成功投递后，默认会追加上下文并唤醒 Planner；可通过 `output.notify_planner` 关闭。
 
 ## 工具选择
@@ -262,41 +256,9 @@ python -m pip install -e ".[dev]"
 
 人物参考板只保留面部与身份，不复制服装。所有入库参考图都会去除元数据并压缩为 JPEG；默认最长边为 2048px、目标上限为 480,000 bytes，配置不能超过 500,000 bytes。默认结果图片保留 24 小时，任务元数据保留 30 天；图库资源不受结果清理影响。`references/`、`sources/`、`results/` 和 `uploads/` 可能包含用户图片，`queue/` 可能包含未完成任务载荷；应限制文件系统权限并纳入自己的备份与清理策略。
 
-本仓库的 Docker 本地开发环境中，宿主机路径为 `.dev/release/MaiBot-1.1.4/data/MaiMBot-plugin-data/maitu.photo-studio/`，容器内路径为 `/MaiMBot/data/plugins/maitu.photo-studio/`。
-
 可以将待导入图片直接放入 `references/person`、`references/outfit` 或 `references/scene` 的直接子目录。插件在启动或重载后异步扫描：成功导入才删除投放文件；人物目录已经有全局人物参考时，新文件会保留并记录冲突。使用描述性文件名，例如 `summer-dress.jpg`。
 
 运行时 `config.toml`、插件数据、日志、数据库、确认令牌和 API Key 都不应提交到 Git，也不应写入新日志或文档。
-
-## 本地开发与验证
-
-仓库提供的同步脚本只复制白名单中的插件源码和 README，不会复制运行配置、数据、日志、`.dev/` 或本地凭据。
-
-```powershell
-powershell -ExecutionPolicy Bypass -File dev/sync_plugin.ps1 `
-  -MaiBotRoot .dev/release/MaiBot-1.1.4
-
-docker compose -p maibot-114 `
-  -f .dev/release/MaiBot-1.1.4/docker-compose.yml `
-  -f dev/docker-compose.local.yml `
-  up -d core
-
-# 已运行实例同步源码后重载 Core
-docker compose -p maibot-114 `
-  -f .dev/release/MaiBot-1.1.4/docker-compose.yml `
-  -f dev/docker-compose.local.yml `
-  restart core
-```
-
-本地 WebUI 默认地址为 `http://127.0.0.1:18001`。使用仓库提供的本地 SDK 依赖运行测试：
-
-```powershell
-$env:PYTHONPATH='.dev/test-deps;.dev/maibot-plugin-sdk'
-python -m pytest -q
-.dev/ruff-env/Scripts/ruff.exe check --no-cache .
-.dev/ruff-env/Scripts/ruff.exe format --check --no-cache .
-python -m compileall -q plugin.py maitu_photo tests
-```
 
 ## 常见问题
 
