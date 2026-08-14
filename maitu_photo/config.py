@@ -385,7 +385,7 @@ class PromptSection(PluginConfigBase):
     scene_photo_system: str = Field(
         default=(
             "你负责生成像真人用手机随手拍摄的真实照片，画面中不得出现 bot 本人或任何可识别的固定主角。"
-            "优先还原手机摄影的自然感：真实景深、普通镜头透视、生活化构图与光线，"
+            "优先还原手机摄影的自然感：轻微手持抖动感、真实景深、普通镜头透视、生活化构图与光线，"
             "避免棚拍感、海报构图、过度美颜和明显 AI 痕迹。不要添加文字或水印。"
         ),
         description="无人物环境照片系统提示词",
@@ -413,7 +413,7 @@ class PromptSection(PluginConfigBase):
     photo_system: str = Field(
         default=(
             "你负责生成像真人用手机拍摄并发送的真实生活照片。"
-            "有参考图时严格保持人物身份、服装与场景空间结构一致；没有参考图时，以 MaiBot 人格文字描述为人物身份依据。"
+            "严格保持参考人物身份、服装与合格场景的一致性；"
             "优先自然手持构图、真实皮肤质感、日常光线与轻微生活瑕疵，"
             "避免棚拍打光、商业海报、过度磨皮和明显 AI 痕迹。不要添加参考图中不存在的文字或水印。"
         ),
@@ -454,9 +454,8 @@ class PromptSection(PluginConfigBase):
     )
     person_prompt: str = Field(
         default=(
-            "保持与 MaiBot 人格设定一致的成年人物身份。只描述五官、发型、肤色、年龄感和面部轮廓，"
+            "保持同一位成年人物的稳定身份特征，五官、发型、体型和肤色自然一致，像真实手机照片里的同一个人"
             # Reference images and outfit prompts own clothing, not this fallback identity text.
-            "不要描述服装或配饰。"
         ),
         description="无人物参考图时的基础人物描述",
         json_schema_extra=_prompt_ui(
@@ -467,8 +466,8 @@ class PromptSection(PluginConfigBase):
     )
     person_fallback_prompt: str = Field(
         default=(
-            "本次没有人物参考图。必须让出镜人物符合 MaiBot 的固定身份与人格，不要随意更换人物。\n"
-            "昵称：{nickname}\n人格设定：{personality}\n基础外貌约束：{person_prompt}"
+            "本次没有人物参考图。必须让出镜人物符合 MaiBot 的固定身份与人格，不要随意更换人物。\\n"
+            "昵称：{nickname}\\n人格设定：{personality}\\n基础外貌约束：{person_prompt}"
         ),
         description="无人物参考图时的人格人物提示词模板",
         json_schema_extra=_prompt_ui(
@@ -499,11 +498,11 @@ class PromptSection(PluginConfigBase):
 
     extract_person: str = Field(
         default=(
-            "将输入人物图整理为 3×2 面部身份参考板：左列为纵向占两格的正面头肩特写，"
-            "右侧四格依次为脸部正面、左侧、右侧和背面发际/后脑特写。"
+            "将输入人物图整理为 3×2 人物参考板：左列为纵向占两格的正面全身特写，"
+            "右侧四格依次为无配饰的脸部正面、侧面和背面特写和可选配饰示意图。"
             "只保留同一人物的五官、发型、肤色、年龄感和面部轮廓；"
-            "不要画出完整服装，不要根据原图复制上衣、裙子、外套或配饰。"
-            "中性贴身打底即可，不加入文字水印。"
+            "穿着无特点的灰色分体贴身衣，不要根据原图复制上衣、裙子、外套或配饰。"
+            "不加入文字水印。"
         ),
         description="人物参考提取提示词",
         json_schema_extra=_prompt_ui(
@@ -514,9 +513,9 @@ class PromptSection(PluginConfigBase):
     generate_person_from_personality: str = Field(
         default=(
             "根据以下 bot 人格与身份设定，生成一张 3×2 面部身份参考板："
-            "左列为纵向占两格的正面头肩特写，右侧四格依次为脸部正面、左侧、右侧和背面发际/后脑特写。"
-            "只根据设定推断五官、发型、肤色、年龄感和面部轮廓；"
-            "不要画出完整服装或配饰，中性贴身打底即可，不加入文字水印。\n"
+            "左列为纵向占两格的正面全身特写，右侧四格依次为无配饰的脸部正面、侧面和背面特写和可选配饰示意图。"
+            "只保留同一人物的五官、发型、肤色、年龄感和面部轮廓；"
+            "穿着无特点的灰色分体贴身衣，不要根据原图复制上衣、裙子、外套或配饰。不加入文字水印。\n"
             "昵称：{nickname}\n人格设定：{personality}\n外貌补充：{appearance_hint}"
         ),
         description="按人格设定生成人物参考板提示词",
@@ -530,8 +529,8 @@ class PromptSection(PluginConfigBase):
     )
     extract_outfit: str = Field(
         default=(
-            "从输入照片中提取同一套服装，生成 2×2 参考板：正面、侧面、背面和服装细节。"
-            "保持颜色、材质、版型和配件一致，使用干净背景，不生成文字水印。"
+            "从输入照片中提取同一套服装参考图，生成 2×2 参考板：正面、侧面、背面和服装细节。"
+            "保持颜色、材质、版型和配件一致，不出现人物，使用干净背景，不生成文字水印。"
         ),
         description="服装参考提取提示词",
         json_schema_extra=_prompt_ui(
@@ -540,11 +539,7 @@ class PromptSection(PluginConfigBase):
         ),
     )
     extract_scene: str = Field(
-        default=(
-            "从输入照片中提取空的私密小空间场景，生成 2×2 参考板："
-            "广角、左视角、右视角和平面图。只允许卧室、浴室或客厅等室内私人空间；"
-            "咖啡店、商场、街道和公共场所不合格。移除人物和文字。"
-        ),
+        default="从输入照片中提取空场景参考图，生成 2×2 参考板：广角、多视角和平面图。",
         description="场景参考提取提示词",
         json_schema_extra=_prompt_ui(
             "场景参考板提取提示词",
@@ -556,8 +551,8 @@ class PromptSection(PluginConfigBase):
             (
                 "请分析人物参考板并只输出符合 Schema 的 JSON：",
                 '{{"appearance_summary":"","confidence":0}}。',
-                "appearance_summary 只写五官、发型、肤色、年龄感和面部轮廓，禁止出现服装、上衣、裙子、外套或配饰。"
-                "confidence 必须是 0 到 1 之间的小数，禁止使用 0 到 100 的百分制。",
+                "appearance_summary 只写五官、发型、肤色、年龄感和面部轮廓，禁止出现服装或配饰。"
+                "confidence 必须是 0 到 1 之间的小数。",
             )
         ),
         description="人物标签提示词",
@@ -581,9 +576,8 @@ class PromptSection(PluginConfigBase):
     tag_scene: str = Field(
         default=(
             "请分析场景参考板并只输出符合 Schema 的 JSON："
-            '{{"room_type":"","privacy_eligible":false,"scene_signature":"","confidence":0}}。'
-            "privacy_eligible 仅当参考板确实是卧室、浴室、客厅等室内私密小空间时为 true；"
-            "confidence 必须是 0 到 1 之间的小数，禁止使用百分制。"
+            '{{"room_type":"","scene_signature":"","confidence":0}}。'
+            "时间和光线由每次生图任务自行判断；confidence 必须是 0 到 1 之间的小数。"
         ),
         description="场景标签提示词",
         json_schema_extra=_prompt_ui(
@@ -671,7 +665,7 @@ class PromptSection(PluginConfigBase):
     generate_scene_photo_detailed: str = Field(
         default=(
             "当需要发送不含 bot 本人的真实手机照片时使用，例如房间一角、窗外、桌上的食物、路边风景、空镜。"
-            "不会传入人物或服装参考图；可按需从图库选择合格室内私密场景参考。"
+            "不会传入人物或服装参考图；可按需从图库选择合格室内场景参考。"
             "请把完整拍摄需求写进 description：主体、环境、光线、时间、构图、氛围和是否有路人/物品。"
             "工具立即返回 task_id，异步生成并发送；同一需求不要重复提交，可用状态工具查询。"
         ),
@@ -759,9 +753,8 @@ class PromptSection(PluginConfigBase):
             "当需要发送 bot 本人出现在画面中的真实手机照片时使用，例如自拍、被拍、生活随手拍。"
             "插件目标是让你像真人一样发手机照片，而不是插画或海报。"
             "请一次性给出完整详细需求：动作姿势、表情、服装、配饰、地点场景、光线时间、构图远近和氛围。"
-            "有可用人物参考板时会优先作为第一张参考图；没有人物参考板时，会自动注入 MaiBot 昵称与人格设定"
-            "生成文字人物描述。"
-            "默认开启「强制要求人物参考图」；关闭该项后，人物参考缺失才会使用文字回退。"
+            "若配置启用了人物参考，将强制使用已启用的全局人物参考板作为第一张参考图；"
+            "若配置关闭人物参考，则改用文字人物描述，不再要求人物参考板。"
             "会积极复用本聊天近期同场景服装，并仅在合格室内私密小空间使用场景参考。"
             "工具立即返回 task_id，异步生成并发送；同一需求不要重复提交。"
         ),
@@ -799,7 +792,7 @@ class PromptSection(PluginConfigBase):
         ),
     )
     generate_photo_accessory_hint: str = Field(
-        default="包、手持物等物件；不要用来描述服装，服装只走 outfit_hint 或服装参考图",
+        default="发饰、眼镜、包、手持物等配饰",
         description="含人物写真工具 accessory_hint 参数说明",
         json_schema_extra=_tool_text_ui(
             "含人物写真工具 · 参数 accessory_hint",
@@ -826,10 +819,7 @@ class PromptSection(PluginConfigBase):
         ),
     )
     generate_photo_use_person_reference: str = Field(
-        default=(
-            "是否尝试使用人物参考；省略时按配置决定，默认严格模式下缺失参考图会拒绝，"
-            "关闭严格模式后才回退到 MaiBot 人格文字描述"
-        ),
+        default="是否使用人物参考；人物参考配置开启时只能省略或 true，传 false 会拒绝",
         description="含人物写真工具 use_person_reference 参数说明",
         json_schema_extra=_tool_text_ui(
             "含人物写真工具 · 参数 use_person_reference",
@@ -893,7 +883,7 @@ class PromptSection(PluginConfigBase):
     )
 
     gallery_brief: str = Field(
-        default="查询或维护人物、服装和场景参考图库",
+        default="管理员查询或维护人物、服装和场景参考图库",
         description="图库管理工具简短描述",
         json_schema_extra=_tool_text_ui(
             "图库管理工具 · 简短描述",
@@ -902,10 +892,7 @@ class PromptSection(PluginConfigBase):
         ),
     )
     gallery_detailed: str = Field(
-        default=(
-            "当前版本不会向 Planner 提供图库写工具，请由插件管理员使用 /maitu 命令管理。"
-            "提取、导入、重标和重生成会创建后台任务；删除需要五分钟有效的确认令牌。"
-        ),
+        default="仅插件管理员可用。提取、导入、重标和重生成操作会创建后台任务；删除需要五分钟有效的确认令牌。",
         description="图库管理工具详细描述",
         json_schema_extra=_tool_text_ui(
             "图库管理工具 · 详细描述",
@@ -959,7 +946,7 @@ class PromptSection(PluginConfigBase):
         ),
     )
     gallery_source_message_id: str = Field(
-        default="通常留空。优先使用当前消息、引用消息或本聊天最近一张单图，不要让用户填写消息 ID",
+        default="包含唯一一张图片的当前或引用消息 ID",
         description="图库管理工具 source_message_id 参数说明",
         json_schema_extra=_tool_text_ui(
             "图库管理工具 · 参数 source_message_id",
