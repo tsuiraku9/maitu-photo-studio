@@ -108,6 +108,17 @@ class _Context:
         self.maisaka = SimpleNamespace(context=context, proactive=proactive)
 
 
+class _HostConfig:
+    def __init__(self, nickname: str, personality: str) -> None:
+        self.values = {
+            "bot.nickname": nickname,
+            "personality.personality": personality,
+        }
+
+    async def get(self, key: str, default: str = "") -> str:
+        return self.values.get(key, default)
+
+
 def _config() -> PhotoPluginConfig:
     config = PhotoPluginConfig()
     config.openai.base_url = "https://provider.example"
@@ -275,33 +286,45 @@ def _add_reference(
     return asset.id
 
 
-def test_photo_submission_requires_active_person_reference(tmp_path: Path) -> None:
+def test_photo_submission_uses_personality_fallback_without_active_person_reference(tmp_path: Path) -> None:
     async def scenario() -> None:
-        service = PhotoStudioService(_Context(), _config(), tmp_path / "data")
-
-        with pytest.raises(PhotoStudioError, match="尚未配置人物参考图"):
-            service.submit_photo(_invocation(), description="natural portrait")
-
-        person_id = _add_reference(
-            service,
-            tmp_path,
-            ReferenceCategory.PERSON,
-            _png("red"),
-            {"appearance_summary": "adult with dark hair", "confidence": 1.0},
+        config = _config()
+        config.references.auto_extract_missing = False
+        config.references.require_person_reference = False
+        ctx = _Context(
+            [
+                {"eligible": False, "scene_signature": "street", "reason": "public"},
+                {"scene_signature": "street", "changed": False},
+            ]
         )
-        service.gallery.mark_needs_review(person_id)
-        with pytest.raises(PhotoStudioError, match="needs_review"):
-            service.submit_photo(_invocation(), description="natural portrait")
+        ctx.config = _HostConfig("Mai", "温柔、好奇、喜欢城市漫步的年轻女性")
+        service = PhotoStudioService(ctx, config, tmp_path / "data")
+        provider = _Provider([_png("white")])
+        service._provider = provider  # type: ignore[assignment]
+        await service.start()
 
-        assert service.storage.list_tasks() == []
+        task = service.submit_photo(_invocation(), description="街边随手拍")
+        assert await service.tasks.drain(timeout=3)
+
+        saved = service.storage.get_task(task.id)
+        assert saved is not None and saved.status == TaskStatus.SENT
+        assert saved.result_metadata["person_reference_used"] is False
+        assert saved.result_metadata["person_fallback"] == "maibot_personality"
+        assert provider.calls[0][1].get("images") in (None, [])
+        assert "温柔、好奇、喜欢城市漫步的年轻女性" in provider.calls[0][0]
+        assert "昵称：Mai" in provider.calls[0][0]
+        references = {item.role: item for item in service.storage.list_task_references(task.id)}
+        assert references["person"].selection_source == "maibot_personality"
+        assert references["person"].fallback_reason == "no_active_person"
         await service.close()
 
     asyncio.run(scenario())
 
 
-def test_photo_submission_rejects_person_reference_opt_out_when_enabled(tmp_path: Path) -> None:
+def test_photo_submission_rejects_person_reference_opt_out_when_strict_mode_enabled(tmp_path: Path) -> None:
     async def scenario() -> None:
         config = _config()
+        config.references.require_person_reference = True
         service = PhotoStudioService(_Context(), config, tmp_path / "data")
         _add_reference(
             service,
@@ -317,6 +340,31 @@ def test_photo_submission_rejects_person_reference_opt_out_when_enabled(tmp_path
                 description="natural portrait",
                 use_person_reference=False,
             )
+
+        assert service.storage.list_tasks() == []
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_photo_submission_requires_active_person_reference_by_default(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = _config()
+        service = PhotoStudioService(_Context(), config, tmp_path / "data")
+
+        with pytest.raises(PhotoStudioError, match="尚未配置人物参考图"):
+            service.submit_photo(_invocation(), description="natural portrait")
+
+        person_id = _add_reference(
+            service,
+            tmp_path,
+            ReferenceCategory.PERSON,
+            _png("red"),
+            {"appearance_summary": "adult with dark hair", "confidence": 1.0},
+        )
+        service.gallery.mark_needs_review(person_id)
+        with pytest.raises(PhotoStudioError, match="needs_review"):
+            service.submit_photo(_invocation(), description="natural portrait")
 
         assert service.storage.list_tasks() == []
         await service.close()
@@ -351,7 +399,101 @@ def test_photo_allows_text_person_when_person_reference_disabled(tmp_path: Path)
         assert provider.calls[0][1].get("images") in (None, [])
         refs = {item.role: item for item in service.storage.list_task_references(task.id)}
         assert refs["person"].asset_id is None
-        assert refs["person"].selection_source == "disabled"
+        assert refs["person"].selection_source == "maibot_personality"
+        assert refs["person"].fallback_reason == "reference_disabled"
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_auto_backfill_skips_scene_extraction_when_generated_scene_is_ineligible(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = _config()
+        config.references.person_reference_enabled = False
+        ctx = _Context(
+            [
+                {"eligible": True, "scene_signature": "bedroom-window", "reason": "private"},
+                {"scene_signature": "bedroom-window", "changed": False},
+                {"eligible": False, "scene_signature": "cafe", "reason": "generated image is public"},
+                {
+                    "type": "dress",
+                    "wearing_scenes": ["casual"],
+                    "seasons": ["summer"],
+                    "styles": ["minimal"],
+                    "confidence": 0.9,
+                },
+            ]
+        )
+        service = PhotoStudioService(ctx, config, tmp_path / "data")
+        service._provider = _Provider([_png("white"), _png("green")])  # type: ignore[assignment]
+        await service.start()
+
+        task = service.submit_photo(
+            _invocation(),
+            description="在卧室窗边拍一张自然照片",
+            scene_hint="卧室窗边",
+        )
+        assert await service.tasks.drain(timeout=3)
+
+        children = service.storage.list_tasks(parent_task_id=task.id)
+        assert len(children) == 1
+        assert children[0].kind == "reference_extract"
+        assert children[0].result_metadata["asset_category"] == ReferenceCategory.OUTFIT.value
+        assert all(asset.category != ReferenceCategory.SCENE for asset in service.gallery.list_assets())
+        eligibility_call = ctx.llm.calls[2]
+        assert isinstance(eligibility_call, list)
+        assert eligibility_call[0]["content"][1]["type"] == "image_url"
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_auto_backfill_extracts_scene_only_after_generated_image_is_eligible(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = _config()
+        config.references.person_reference_enabled = False
+        ctx = _Context(
+            [
+                {"eligible": True, "scene_signature": "bedroom-window", "reason": "private"},
+                {"scene_signature": "bedroom-window", "changed": False},
+                {"eligible": True, "scene_signature": "bedroom-window", "reason": "generated image is private"},
+                {
+                    "type": "dress",
+                    "wearing_scenes": ["casual"],
+                    "seasons": ["summer"],
+                    "styles": ["minimal"],
+                    "confidence": 0.9,
+                },
+                {
+                    "room_type": "bedroom",
+                    "privacy_eligible": True,
+                    "scene_signature": "bedroom-window",
+                    "confidence": 0.9,
+                },
+            ]
+        )
+        service = PhotoStudioService(ctx, config, tmp_path / "data")
+        service._provider = _Provider([_png("white"), _png("green"), _png("blue")])  # type: ignore[assignment]
+        await service.start()
+
+        task = service.submit_photo(
+            _invocation(),
+            description="在卧室窗边拍一张自然照片",
+            scene_hint="卧室窗边",
+        )
+        assert await service.tasks.drain(timeout=3)
+
+        children = service.storage.list_tasks(parent_task_id=task.id)
+        assert {child.result_metadata["asset_category"] for child in children} == {"outfit", "scene"}
+        scenes = service.gallery.list_assets(category=ReferenceCategory.SCENE)
+        assert len(scenes) == 1
+        assert scenes[0].tags == {
+            "room_type": "bedroom",
+            "privacy_eligible": True,
+            "scene_signature": "bedroom-window",
+            "confidence": 0.9,
+        }
+        assert "光线" in service._scene_prompt(scenes[0], "")
         await service.close()
 
     asyncio.run(scenario())
@@ -377,8 +519,6 @@ def test_scene_photo_can_use_scene_reference_without_person(tmp_path: Path) -> N
             scene_bytes,
             {
                 "room_type": "bedroom",
-                "lighting": ["window"],
-                "time_of_day": "morning",
                 "privacy_eligible": True,
                 "scene_signature": "bedroom-window",
                 "confidence": 1.0,
@@ -454,8 +594,6 @@ def test_photo_reference_order_and_same_scene_outfit_continuity(tmp_path: Path) 
             scene_bytes,
             {
                 "room_type": "bedroom",
-                "lighting": ["window"],
-                "time_of_day": "morning",
                 "privacy_eligible": True,
                 "scene_signature": "bedroom-window",
                 "confidence": 1.0,
@@ -501,6 +639,56 @@ def test_photo_reference_order_and_same_scene_outfit_continuity(tmp_path: Path) 
         await service.close()
 
     asyncio.run(scenario())
+
+
+def test_automatic_outfit_backfill_updates_current_photo_continuity(tmp_path: Path) -> None:
+    config = _config()
+    service = PhotoStudioService(_Context(), config, tmp_path / "data")
+    outfit_id = _add_reference(
+        service,
+        tmp_path,
+        ReferenceCategory.OUTFIT,
+        _png("green"),
+        {
+            "type": "dress",
+            "wearing_scenes": ["home"],
+            "seasons": ["summer"],
+            "styles": ["casual"],
+            "confidence": 1.0,
+        },
+    )
+    parent = service.storage.create_task(
+        ImageTask(
+            kind="photo",
+            scope_key="group:group-1",
+            user_id="user-1",
+            stream_id="stream-1",
+            group_id="group-1",
+        )
+    )
+    service.storage.set_task_status(
+        parent.id,
+        TaskStatus.SENT,
+        result_metadata={"scene_signature": "bedroom-window"},
+    )
+    service.continuity.record_photo(
+        parent.scope_key,
+        "bedroom-window",
+        outfit_id=None,
+        scene_id=None,
+        metadata={"task_id": parent.id},
+    )
+    backfill = ImageTask(
+        kind="reference_extract",
+        scope_key=parent.scope_key,
+        parent_task_id=parent.id,
+    )
+
+    assert service._attach_automatic_reference_to_continuity(backfill, service.gallery.require(outfit_id))
+    decision = service.continuity.decide(parent.scope_key, "bedroom-window")
+    assert decision.outfit_id == outfit_id
+    assert decision.outfit_reason == "same_scene_same_day_within_ttl"
+    asyncio.run(service.close())
 
 
 def test_photo_prefers_recently_used_outfit_when_candidates_tie(tmp_path: Path) -> None:
@@ -608,6 +796,86 @@ def test_delivery_failure_keeps_result_for_retry_and_notifies_failure(tmp_path: 
         assert failed.result_path is not None and failed.result_path.is_file()
         assert len(ctx.maisaka.context.append_calls) == 1
         assert ctx.maisaka.proactive.trigger_calls[0]["reason"] == "maitu_image_failed"
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_delivery_failure_does_not_enqueue_automatic_backfill(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = _config()
+        config.references.person_reference_enabled = False
+        ctx = _Context(
+            [
+                {"eligible": False, "scene_signature": "street", "reason": "public"},
+                {"scene_signature": "street", "changed": False},
+            ],
+            image_success=False,
+        )
+        service = PhotoStudioService(ctx, config, tmp_path)
+        provider = _Provider([_png("red"), _png("green")])
+        service._provider = provider  # type: ignore[assignment]
+        await service.start()
+
+        task = service.submit_photo(
+            _invocation(),
+            description="在街边拍一张自然照片",
+            scene_hint="街道",
+        )
+        assert await service.tasks.drain(timeout=3)
+
+        saved = service.storage.get_task(task.id)
+        assert saved is not None and saved.status == TaskStatus.FAILED
+        assert service.storage.list_tasks(parent_task_id=task.id) == []
+        assert len(provider.calls) == 1
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_reference_extraction_marks_paid_request_before_provider_call(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        ctx = _Context(
+            [
+                {
+                    "type": "dress",
+                    "wearing_scenes": ["home"],
+                    "seasons": ["summer"],
+                    "styles": ["casual"],
+                    "confidence": 1.0,
+                }
+            ]
+        )
+        service = PhotoStudioService(ctx, _config(), tmp_path)
+
+        class InspectingProvider(_Provider):
+            def __init__(self) -> None:
+                super().__init__([_png("green")])
+                self.task_id = ""
+                self.saw_paid_request = False
+
+            async def generate(self, prompt: str, **kwargs) -> GeneratedImage:
+                task = service.storage.get_task(self.task_id)
+                self.saw_paid_request = task is not None and task.paid_request_started
+                return await super().generate(prompt, **kwargs)
+
+        provider = InspectingProvider()
+        service._provider = provider  # type: ignore[assignment]
+        await service.start()
+        task = service.submit_reference_job(
+            _invocation(),
+            operation="extract",
+            category=ReferenceCategory.OUTFIT,
+            name="summer dress",
+            image=_png("blue"),
+        )
+        provider.task_id = task.id
+        assert await service.tasks.drain(timeout=3)
+
+        saved = service.storage.get_task(task.id)
+        assert saved is not None and saved.status == TaskStatus.SENT
+        assert saved.paid_request_started is True
+        assert provider.saw_paid_request is True
         await service.close()
 
     asyncio.run(scenario())

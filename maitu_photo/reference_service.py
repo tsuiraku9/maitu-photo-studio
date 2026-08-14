@@ -13,7 +13,7 @@ import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -100,8 +100,7 @@ class ReferencePrompts:
     )
     tag_scene: str = (
         "Return only JSON with exactly this schema: "
-        '{"room_type":"","lighting":[],"time_of_day":"",'
-        '"privacy_eligible":false,"scene_signature":"","confidence":0}'
+        '{"room_type":"","privacy_eligible":false,"scene_signature":"","confidence":0}'
     )
 
     def __post_init__(self) -> None:
@@ -177,8 +176,6 @@ _TAG_FIELDS: dict[ReferenceCategory, tuple[str, ...]] = {
     ),
     ReferenceCategory.SCENE: (
         "room_type",
-        "lighting",
-        "time_of_day",
         "privacy_eligible",
         "scene_signature",
         "confidence",
@@ -188,27 +185,29 @@ _TAG_FIELDS: dict[ReferenceCategory, tuple[str, ...]] = {
 _LIST_FIELDS: dict[ReferenceCategory, frozenset[str]] = {
     ReferenceCategory.PERSON: frozenset(),
     ReferenceCategory.OUTFIT: frozenset({"wearing_scenes", "seasons", "styles"}),
-    ReferenceCategory.SCENE: frozenset({"lighting"}),
+    ReferenceCategory.SCENE: frozenset(),
 }
 
 _TEXT_FIELDS: dict[ReferenceCategory, frozenset[str]] = {
     ReferenceCategory.PERSON: frozenset({"appearance_summary"}),
     ReferenceCategory.OUTFIT: frozenset({"type"}),
-    ReferenceCategory.SCENE: frozenset({"room_type", "time_of_day", "scene_signature"}),
+    ReferenceCategory.SCENE: frozenset({"room_type", "scene_signature"}),
 }
 
 
-def _normalize_legacy_person_tags(
+def _normalize_legacy_tags(
     category: ReferenceCategory,
     value: Mapping[str, Any],
 ) -> Mapping[str, Any]:
-    """Drop the retired person clothing/accessory fields from older assets."""
+    """Drop retired fields that do not belong in reference metadata."""
 
-    if category != ReferenceCategory.PERSON:
+    retired_fields = {
+        ReferenceCategory.PERSON: frozenset({"accessories"}),
+        ReferenceCategory.SCENE: frozenset({"light", "lighting", "time_of_day"}),
+    }.get(category, frozenset())
+    if not retired_fields or not any(key in value for key in retired_fields):
         return value
-    if "accessories" not in value:
-        return value
-    return {key: item for key, item in value.items() if key != "accessories"}
+    return {key: item for key, item in value.items() if key not in retired_fields}
 
 
 def validate_reference_tags(
@@ -227,7 +226,7 @@ def validate_reference_tags(
             errors=("tags must be a JSON object",),
         )
 
-    value = _normalize_legacy_person_tags(category, value)
+    value = _normalize_legacy_tags(category, value)
     expected = set(_TAG_FIELDS[category])
     actual = {key for key in value if isinstance(key, str)}
     errors: list[str] = []
@@ -313,12 +312,14 @@ class ReferenceService:
         llm: MaiBotLLMAdapter,
         data_dir: Path | str,
         config: ReferenceServiceConfig | None = None,
+        before_provider_request: Callable[[], None] | None = None,
     ) -> None:
         self.gallery = gallery
         self.provider = provider
         self.llm = llm
         self.data_dir = Path(data_dir).resolve()
         self.config = config or ReferenceServiceConfig()
+        self._before_provider_request = before_provider_request
         self._mutation_lock = asyncio.Lock()
 
     async def import_reference(
@@ -560,6 +561,8 @@ class ReferenceService:
         selected_size = size or self.config.extraction_size
         if selected_size:
             kwargs["size"] = selected_size
+        if self._before_provider_request is not None:
+            self._before_provider_request()
         try:
             return await self.provider.generate(prompt, **kwargs)
         except Exception:  # noqa: BLE001 - provider implementations are injected

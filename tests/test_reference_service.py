@@ -55,8 +55,6 @@ def _tags(category: ReferenceCategory) -> dict[str, Any]:
         }
     return {
         "room_type": "bedroom",
-        "lighting": ["window light"],
-        "time_of_day": "morning",
         "privacy_eligible": True,
         "scene_signature": "bedroom-window-left",
         "confidence": 0.9,
@@ -163,7 +161,7 @@ def test_extract_outfit_uses_sheet_prompt_and_compresses_both_artifacts(
     storage.close()
 
 
-def test_tag_schema_is_exact_and_scene_privacy_is_not_selectable() -> None:
+def test_tag_schema_is_exact_and_public_scene_references_are_not_selectable() -> None:
     valid = validate_reference_tags("outfit", _tags(ReferenceCategory.OUTFIT))
     assert valid.schema_valid is True
     assert valid.selectable is True
@@ -175,11 +173,19 @@ def test_tag_schema_is_exact_and_scene_privacy_is_not_selectable() -> None:
     with pytest.raises(ReferenceTagValidationError):
         require_valid_reference_tags("outfit", with_extra)
 
-    public_scene = {**_tags(ReferenceCategory.SCENE), "privacy_eligible": False}
-    scene = validate_reference_tags("scene", public_scene)
+    scene = validate_reference_tags(
+        "scene",
+        {
+            **_tags(ReferenceCategory.SCENE),
+            "light": "window light",
+            "time_of_day": "morning",
+            "privacy_eligible": False,
+        },
+    )
     assert scene.schema_valid is True
     assert scene.selectable is False
     assert scene.error_code == "scene_not_private"
+    assert set(scene.tags) == {"room_type", "privacy_eligible", "scene_signature", "confidence"}
 
     person = validate_reference_tags("person", _tags(ReferenceCategory.PERSON))
     assert person.schema_valid is True
@@ -208,18 +214,26 @@ def test_generate_person_from_personality_does_not_send_source_image(tmp_path: P
     storage.close()
 
 
-def test_private_scene_false_and_llm_failure_are_saved_for_review(
+def test_scene_generation_attributes_are_not_persisted_and_public_scene_is_saved_for_review(
     tmp_path: Path,
 ) -> None:
-    public_scene = {**_tags(ReferenceCategory.SCENE), "privacy_eligible": False}
+    legacy_scene_tags = {
+        **_tags(ReferenceCategory.SCENE),
+        "light": "window light",
+        "time_of_day": "morning",
+        "privacy_eligible": False,
+    }
     provider = FakeProvider()
-    llm = FakeLLM([public_scene, RuntimeError("Bearer secret-value-should-not-persist")])
-    storage, _, service = _service(tmp_path, provider=provider, llm=llm)
+    llm = FakeLLM([legacy_scene_tags, RuntimeError("Bearer secret-value-should-not-persist")])
+    storage, gallery, service = _service(tmp_path, provider=provider, llm=llm)
 
     scene = _run(service.import_reference("scene", _image(), name="cafe"))
     assert scene.status == AssetStatus.NEEDS_REVIEW
-    assert scene.tags["privacy_eligible"] is False
-    assert scene.selection_metadata["tag_error_code"] == "scene_not_private"
+    assert scene.tags == {**_tags(ReferenceCategory.SCENE), "privacy_eligible": False}
+    assert "light" not in scene.effective_tags
+    assert "time_of_day" not in scene.effective_tags
+    assert scene.effective_tags["privacy_eligible"] is False
+    assert gallery.candidates("scene") == []
 
     outfit = _run(service.import_reference("outfit", _image((30, 40, 50, 255)), name="unknown"))
     assert outfit.status == AssetStatus.NEEDS_REVIEW

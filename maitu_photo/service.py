@@ -12,11 +12,11 @@ import re
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .compression import CompressionConfig
 from .config import PhotoPluginConfig
-from .continuity import ContinuityManager
+from .continuity import ContinuityManager, normalize_scene_signature
 from .gallery import DuplicateReferenceError, ReferenceGallery, file_sha256
 from .llm_adapter import MaiBotLLMAdapter
 from .models import (
@@ -438,8 +438,8 @@ class PhotoStudioService:
     ) -> ImageTask:
         if not description.strip():
             raise ValueError("description 不能为空")
-        # Validate the caller's opt-out against the current config before the
-        # task is enqueued so the planner gets an actionable error immediately.
+        # Validate the caller's opt-out against strict-reference mode before
+        # the task is enqueued so the planner gets an actionable error immediately.
         self._validate_photo_person_config(use_person_reference)
         # The startup folder scan is intentionally asynchronous.  Defer the
         # asset-existence check until the worker if it is still in flight;
@@ -813,11 +813,8 @@ class PhotoStudioService:
         # Re-check after a task has waited in the queue.  An administrator may
         # disable or replace the singleton while an earlier task is queued.
         await self.wait_for_startup_reference_scan()
-        use_person = self._person_reference_required(payload.get("use_person_reference"))
-        if use_person:
-            person = self._validate_photo_person_requirement(payload.get("use_person_reference"))
-        else:
-            person = None
+        use_person = self._person_reference_requested(payload.get("use_person_reference"))
+        person = self._resolve_photo_person_reference(payload.get("use_person_reference")) if use_person else None
         use_outfit = _optional_bool(
             payload.get("use_outfit_reference"), self.config.references.outfit_reference_enabled
         )
@@ -845,7 +842,8 @@ class PhotoStudioService:
             references.append(selection.outfit.reference_path.read_bytes())
         if selection.scene is not None:
             references.append(selection.scene.reference_path.read_bytes())
-        person_prompt = self._person_prompt(person)
+        nickname, personality = await self.load_host_identity() if person is None else ("", "")
+        person_prompt = self._person_prompt(person, nickname=nickname, personality=personality)
         outfit_prompt = self._outfit_prompt(
             selection.outfit,
             str(payload.get("outfit_hint") or ""),
@@ -892,6 +890,7 @@ class PhotoStudioService:
             "scene_signature": selection.scene_signature,
             "scene_eligible": selection.scene_eligible,
             "person_reference_used": person is not None,
+            "person_fallback": "maibot_personality" if person is None else None,
         }
         result_path = self._save_result(task.id, generated)
         self.storage.set_task_status(
@@ -910,8 +909,19 @@ class PhotoStudioService:
             metadata={"task_id": task.id},
         )
         self.payloads.delete(task.id)
-        self._schedule_backfill_tasks(task, payload, selection, result_path, use_outfit, use_scene)
         await self._deliver(self.storage.get_task(task.id) or task)
+        # Backfilling is optional maintenance.  Do it only after the result is
+        # confirmed delivered so a slow or failed auxiliary model never blocks
+        # the user's paid photo, nor extracts an undelivered image into the gallery.
+        await self._schedule_backfill_tasks(
+            task,
+            payload,
+            selection,
+            result_path,
+            generated.media_type,
+            use_outfit,
+            use_scene,
+        )
 
     async def _persist_and_deliver(
         self,
@@ -1034,7 +1044,10 @@ class PhotoStudioService:
         # Import and retag only need the MaiBot tagging model.  Avoid forcing
         # an OpenAI image provider for already-prepared uploads, so gallery
         # maintenance remains usable before generation credentials are set.
-        service = self._reference_service(require_provider=operation in {"extract", "regenerate", "generate_person"})
+        service = self._reference_service(
+            require_provider=operation in {"extract", "regenerate", "generate_person"},
+            before_provider_request=lambda: self.storage.mark_task_request_started(task.id),
+        )
         asset: ReferenceAsset
         if operation == "generate_person":
             personality = str(payload.get("personality") or "").strip()
@@ -1086,6 +1099,15 @@ class PhotoStudioService:
             asset = await service.regenerate_reference(str(payload.get("asset_id") or ""), source_task_id=task.id)
         else:
             raise ValueError(f"未知参考图任务操作: {operation}")
+        if bool(payload.get("automatic")):
+            try:
+                self._attach_automatic_reference_to_continuity(task, asset)
+            except Exception as exc:  # The extracted asset remains usable even if continuity repair fails.
+                self.ctx.logger.warning(
+                    "自动补库参考图 %s 已入库，但未能写入连续性状态: %s",
+                    asset.id,
+                    _safe_error(exc),
+                )
         self.storage.set_task_status(
             task.id,
             TaskStatus.SENT,
@@ -1109,7 +1131,38 @@ class PhotoStudioService:
             except Exception as exc:
                 self._merge_task_metadata(task.id, admin_notification_error=_safe_error(exc))
 
-    def _reference_service(self, *, require_provider: bool = True) -> ReferenceService:
+    def _attach_automatic_reference_to_continuity(self, task: ImageTask, asset: ReferenceAsset) -> bool:
+        """Associate a completed automatic backfill with its still-current photo."""
+
+        if not task.parent_task_id or asset.category not in (ReferenceCategory.OUTFIT, ReferenceCategory.SCENE):
+            return False
+        parent = self.storage.get_task(task.parent_task_id)
+        if parent is None or parent.kind != "photo" or parent.scope_key != task.scope_key:
+            return False
+        scene_signature = str(parent.result_metadata.get("scene_signature") or "").strip()
+        if not scene_signature:
+            return False
+        if asset.category == ReferenceCategory.SCENE:
+            extracted_signature = str(asset.effective_tags.get("scene_signature") or "").strip()
+            if not extracted_signature or normalize_scene_signature(extracted_signature) != normalize_scene_signature(
+                scene_signature
+            ):
+                return False
+        return self.continuity.attach_backfilled_reference(
+            scope_key=parent.scope_key,
+            parent_task_id=parent.id,
+            scene_signature=scene_signature,
+            category=asset.category,
+            asset_id=asset.id,
+            backfill_task_id=task.id,
+        )
+
+    def _reference_service(
+        self,
+        *,
+        require_provider: bool = True,
+        before_provider_request: Callable[[], None] | None = None,
+    ) -> ReferenceService:
         compression = CompressionConfig(
             target_bytes=min(int(self.config.references.max_bytes), 480_000),
             max_edge=int(self.config.references.max_edge),
@@ -1129,6 +1182,7 @@ class PhotoStudioService:
             provider=self._provider_instance() if require_provider else self._provider,
             llm=self.llm,
             data_dir=self.data_dir,
+            before_provider_request=before_provider_request,
             config=ReferenceServiceConfig(
                 compression=compression,
                 prompts=prompts,
@@ -1172,8 +1226,8 @@ class PhotoStudioService:
                 task_id=task_id,
                 role="person",
                 asset_id=person.id if person else None,
-                selection_source="singleton" if person else ("disabled" if not use_person else "text_fallback"),
-                fallback_reason=None if person else ("disabled" if not use_person else "no_active_person"),
+                selection_source="singleton" if person else "maibot_personality",
+                fallback_reason=None if person else ("no_active_person" if use_person else "reference_disabled"),
             ),
             TaskReference(
                 task_id=task_id,
@@ -1224,12 +1278,13 @@ class PhotoStudioService:
             for record in records:
                 self.storage.record_task_reference(record)
 
-    def _schedule_backfill_tasks(
+    async def _schedule_backfill_tasks(
         self,
         parent: ImageTask,
         payload: Mapping[str, Any],
         selection: SelectionResult,
         result_path: Path,
+        result_media_type: str,
         use_outfit: bool,
         use_scene: bool,
     ) -> None:
@@ -1243,12 +1298,27 @@ class PhotoStudioService:
             message_id="",
             message={},
         )
-        result = result_path.read_bytes()
+        try:
+            result = result_path.read_bytes()
+        except OSError as exc:
+            self.ctx.logger.warning(
+                "任务 %s 已投递，但无法读取结果以自动补充参考图: %s",
+                parent.id,
+                _safe_error(exc),
+            )
+            return
         jobs: list[tuple[ReferenceCategory, str]] = []
         if use_outfit and selection.outfit is None:
             jobs.append((ReferenceCategory.OUTFIT, f"自动补库-服装-{parent.id[:8]}"))
         if use_scene and selection.scene is None and selection.scene_eligible:
-            jobs.append((ReferenceCategory.SCENE, f"自动补库-场景-{parent.id[:8]}"))
+            if await self._generated_scene_is_eligible(
+                parent.id,
+                payload,
+                result,
+                result_media_type,
+                expected_scene_signature=selection.scene_signature,
+            ):
+                jobs.append((ReferenceCategory.SCENE, f"自动补库-场景-{parent.id[:8]}"))
         for category, name in jobs:
             try:
                 self.submit_reference_job(
@@ -1268,6 +1338,45 @@ class PhotoStudioService:
                     _safe_error(exc),
                 )
 
+    async def _generated_scene_is_eligible(
+        self,
+        task_id: str,
+        payload: Mapping[str, Any],
+        image: bytes,
+        media_type: str,
+        *,
+        expected_scene_signature: str,
+    ) -> bool:
+        """Verify a generated image before creating an automatic scene extraction job."""
+
+        try:
+            result = await self.llm.generate_json(
+                self.prompts.render(
+                    "scene_eligibility",
+                    description=str(payload.get("description") or ""),
+                    scene_hint=str(payload.get("scene_hint") or ""),
+                ),
+                task_name=self.config.model_tasks.selection_task_name,
+                image_bytes=image,
+                mime_type=media_type or "image/jpeg",
+                temperature=self.config.model_tasks.temperature,
+                max_tokens=self.config.model_tasks.max_tokens,
+            )
+            actual_signature = str(result.get("scene_signature") or "").strip()
+            return (
+                isinstance(result.get("eligible"), bool)
+                and result["eligible"]
+                and bool(actual_signature)
+                and normalize_scene_signature(actual_signature) == normalize_scene_signature(expected_scene_signature)
+            )
+        except Exception as exc:  # noqa: BLE001 - unverified images must never trigger extraction
+            self.ctx.logger.warning(
+                "Task %s skipped automatic scene backfill because image eligibility could not be verified: %s",
+                task_id,
+                _safe_error(exc),
+            )
+            return False
+
     def _save_result(self, task_id: str, generated: GeneratedImage) -> Path:
         suffix = {
             "image/png": ".png",
@@ -1279,7 +1388,7 @@ class PhotoStudioService:
         TaskPayloadStore._atomic_write(path, generated.data)
         return path
 
-    def _person_prompt(self, person: ReferenceAsset | None) -> str:
+    def _person_prompt(self, person: ReferenceAsset | None, *, nickname: str = "", personality: str = "") -> str:
         if person is not None:
             tags = _person_identity_tags(person.effective_tags)
             return (
@@ -1289,6 +1398,8 @@ class PhotoStudioService:
         return self.prompts.render(
             "person_fallback_prompt",
             person_prompt=self.config.prompts.person_prompt,
+            nickname=nickname or "未设置昵称",
+            personality=personality or "未读取到人格设定；保持自然一致的成年人物身份。",
         )
 
     def _outfit_prompt(self, outfit: ReferenceAsset | None, hint: str, accessory_hint: str = "") -> str:
@@ -1309,7 +1420,8 @@ class PhotoStudioService:
     def _scene_prompt(self, scene: ReferenceAsset | None, hint: str) -> str:
         if scene is not None:
             base = (
-                "严格保持场景参考图的空间结构与关键细节一致。标签："
+                "场景参考图仅用于还原空间结构、固定布局与关键建模细节；"
+                "时间和光线应根据本次拍摄需求自行判断补充。标签："
                 f"{json.dumps(scene.effective_tags, ensure_ascii=False)}"
             )
         else:
@@ -1336,24 +1448,22 @@ class PhotoStudioService:
         digest = hashlib.sha256(selected.encode("utf-8")).hexdigest()[:16]
         return f"{self.config.plugin.config_version}:{kind}:{digest}"
 
+    def _person_reference_requested(self, requested: Any) -> bool:
+        """Return whether this task should try to attach the global person board."""
+
+        return _optional_bool(requested, self.config.references.person_reference_enabled)
+
     def _person_reference_required(self, requested: Any) -> bool:
-        """Return whether a person-bearing photo must attach the person board.
+        """Return whether strict mode requires a selectable person board."""
 
-        Config off → person reference is optional and defaults to off.
-        Config on  → person reference is required unless the caller opts out,
-        which is rejected by ``_validate_photo_person_config``.
-        """
-
-        if not self.config.references.person_reference_enabled:
-            return bool(requested) if requested is not None else False
-        return True if requested is None else bool(requested)
+        return bool(self.config.references.require_person_reference) and self._person_reference_requested(requested)
 
     def _validate_photo_person_config(self, requested: Any) -> None:
-        if not self.config.references.person_reference_enabled:
-            # Config closed: callers may omit or pass false.  Passing true is
-            # still allowed and will require an active person board at runtime.
-            return
-        if requested is False:
+        if (
+            self.config.references.person_reference_enabled
+            and self.config.references.require_person_reference
+            and requested is False
+        ):
             raise PhotoStudioError("当前配置要求含人物写真必须使用人物参考图，use_person_reference 不能关闭")
 
     def _validate_photo_person_requirement(self, requested: Any) -> ReferenceAsset:
@@ -1374,6 +1484,14 @@ class PhotoStudioService:
                 f"人物参考图当前状态为 {person.status.value}，必须先由管理员启用或修复后才能生成照片"
             )
         return person
+
+    def _resolve_photo_person_reference(self, requested: Any) -> ReferenceAsset | None:
+        """Use an active board when available; otherwise fall back to MaiBot personality text."""
+
+        if self._person_reference_required(requested):
+            return self._validate_photo_person_requirement(requested)
+        person = self.gallery.get_person()
+        return person if person is not None and person.is_selectable else None
 
     async def load_host_identity(self) -> tuple[str, str]:
         """Read MaiBot nickname and personality from host config."""

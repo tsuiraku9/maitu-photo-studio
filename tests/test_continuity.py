@@ -31,6 +31,7 @@ def _setup(tmp_path: Path):
         source_path="source/scene.jpg",
         reference_path="refs/scene.jpg",
         sha256="b" * 64,
+        tags={"privacy_eligible": True},
     )
     return storage, gallery, outfit, scene
 
@@ -61,6 +62,58 @@ def test_same_scene_same_day_within_ttl_reuses_references(tmp_path: Path) -> Non
     assert decision.reuse_outfit is True
     assert decision.outfit_reason == "same_scene_same_day_within_ttl"
     assert manager.decide("group:2", "warm bedroom", now=recorded_at).outfit_id is None
+    storage.close()
+
+
+def test_automatic_backfill_binds_only_to_the_current_same_scene_photo(tmp_path: Path) -> None:
+    storage, _, outfit, scene = _setup(tmp_path)
+    manager = ContinuityManager(storage, ttl_hours=12, timezone_name="Asia/Hong_Kong")
+    recorded_at = datetime(2026, 8, 11, 1, 0, tzinfo=timezone.utc)
+    manager.record_photo(
+        "group:1",
+        "bedroom",
+        outfit_id=None,
+        scene_id=None,
+        metadata={"task_id": "photo-1"},
+        now=recorded_at,
+    )
+
+    assert manager.attach_backfilled_reference(
+        scope_key="group:1",
+        parent_task_id="photo-1",
+        scene_signature="bedroom",
+        category="outfit",
+        asset_id=outfit.id,
+        backfill_task_id="backfill-1",
+    )
+    assert manager.attach_backfilled_reference(
+        scope_key="group:1",
+        parent_task_id="photo-1",
+        scene_signature="bedroom",
+        category="scene",
+        asset_id=scene.id,
+        backfill_task_id="backfill-2",
+    )
+    decision = manager.decide("group:1", "bedroom", now=recorded_at + timedelta(minutes=1))
+    assert decision.outfit_id == outfit.id
+    assert decision.scene_id == scene.id
+
+    manager.record_photo(
+        "group:1",
+        "bedroom",
+        outfit_id=None,
+        scene_id=None,
+        metadata={"task_id": "photo-2"},
+        now=recorded_at + timedelta(minutes=2),
+    )
+    assert not manager.attach_backfilled_reference(
+        scope_key="group:1",
+        parent_task_id="photo-1",
+        scene_signature="bedroom",
+        category="outfit",
+        asset_id=outfit.id,
+        backfill_task_id="late-backfill",
+    )
     storage.close()
 
 

@@ -15,6 +15,7 @@ from .models import (
     ReferenceCategory,
     ReferenceSelection,
     TaskReference,
+    normalize_reference_tags,
 )
 from .storage import DuplicateRecordError, RecordNotFoundError, SQLiteStorage
 
@@ -194,7 +195,8 @@ class ReferenceGallery:
             )
         else:
             statuses = (AssetStatus.ACTIVE,)
-        return self.list_assets(category=category, statuses=statuses, limit=limit)
+        assets = self.list_assets(category=category, statuses=statuses, limit=limit)
+        return assets if include_disabled else [asset for asset in assets if asset.is_selectable]
 
     def candidate_metadata(
         self,
@@ -233,6 +235,7 @@ class ReferenceGallery:
                 asset.manual_tags.update(dict(manual_tags))
             else:
                 asset.manual_tags = dict(manual_tags)
+            asset.manual_tags = normalize_reference_tags(asset.category, asset.manual_tags)
         if selection_metadata is not None:
             asset.selection_metadata.update(dict(selection_metadata))
         return self.storage.update_reference_asset(asset)

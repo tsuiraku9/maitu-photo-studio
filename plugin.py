@@ -19,7 +19,7 @@ if __package__:
         parse_tags,
     )
     from .maitu_photo.config import PhotoPluginConfig, ToolDescriptionSection
-    from .maitu_photo.models import ReferenceAsset, ReferenceCategory, TaskStatus
+    from .maitu_photo.models import AssetStatus, ReferenceAsset, ReferenceCategory, TaskStatus
     from .maitu_photo.reference_service import validate_reference_tags
     from .maitu_photo.runtime import (
         InvocationContext,
@@ -45,7 +45,7 @@ else:  # direct local import used by unit tests
         parse_tags,
     )
     from maitu_photo.config import PhotoPluginConfig, ToolDescriptionSection
-    from maitu_photo.models import ReferenceAsset, ReferenceCategory, TaskStatus
+    from maitu_photo.models import AssetStatus, ReferenceAsset, ReferenceCategory, TaskStatus
     from maitu_photo.reference_service import validate_reference_tags
     from maitu_photo.runtime import (
         InvocationContext,
@@ -65,6 +65,61 @@ else:  # direct local import used by unit tests
 
 
 PLUGIN_ID = "maitu.photo-studio"
+
+
+_REFERENCE_CATEGORY_LABELS = {
+    ReferenceCategory.PERSON: "人物参考图",
+    ReferenceCategory.OUTFIT: "服装参考图",
+    ReferenceCategory.SCENE: "场景参考图",
+}
+_ASSET_STATUS_LABELS = {
+    "active": "已启用，可用于生图",
+    "disabled": "已停用，不参与生图",
+    "needs_review": "待审核，暂不参与生图",
+    "deleted": "已删除",
+}
+_REFERENCE_TAG_LABELS = {
+    ReferenceCategory.PERSON: {
+        "appearance_summary": "外貌摘要",
+        "confidence": "标签置信度",
+    },
+    ReferenceCategory.OUTFIT: {
+        "type": "服装类型",
+        "wearing_scenes": "适用场景",
+        "seasons": "适用季节",
+        "styles": "风格",
+        "confidence": "标签置信度",
+    },
+    ReferenceCategory.SCENE: {
+        "room_type": "房间类型",
+        "privacy_eligible": "私密空间资格",
+        "scene_signature": "场景指纹",
+        "confidence": "标签置信度",
+    },
+}
+_REFERENCE_VALUE_LABELS = {
+    "bedroom": "卧室",
+    "bathroom": "浴室",
+    "living room": "客厅",
+    "living_room": "客厅",
+    "home": "居家",
+    "casual": "日常",
+    "daily": "日常",
+    "loungewear": "家居休闲",
+    "sleep": "睡眠",
+    "spring": "春季",
+    "summer": "夏季",
+    "autumn": "秋季",
+    "fall": "秋季",
+    "winter": "冬季",
+    "cute": "甜美",
+    "soft girl": "软妹风",
+    "minimalist": "极简",
+    "cozy": "舒适",
+    "kawaii": "可爱",
+    "pajamas": "睡衣",
+    "cozy knit set": "舒适针织套装",
+}
 
 
 class MaiTuPhotoPlugin(MaiBotPlugin):
@@ -117,6 +172,8 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             config = self.config
         except RuntimeError:
             config = PhotoPluginConfig()
+        if not config.references.planner_gallery_management_enabled:
+            components = [component for component in components if component.get("name") != "manage_reference_gallery"]
         sections = {
             "generate_scene_photo": config.prompts.generate_scene_photo_tool,
             "generate_photo": config.prompts.generate_photo_tool,
@@ -217,7 +274,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         brief_description="生成 bot 本人出镜的手机真实生活照片",
         detailed_description=(
             "当需要发送 bot 本人出现在画面中的真实手机照片时使用。"
-            "人物参考配置开启时必须使用全局人物参考板；关闭时改用文字人物描述。"
+            "默认要求可用人物参考板；关闭严格要求后，缺失时自动注入 MaiBot 人格设定作为文字人物描述。"
             "请提供完整拍摄需求；工具立即返回任务 ID。"
         ),
         parameters=[
@@ -230,7 +287,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             ToolParameterInfo(
                 "use_person_reference",
                 ToolParamType.BOOLEAN,
-                "是否使用人物参考；配置开启时传 false 会拒绝",
+                "是否尝试使用人物参考；默认严格模式下传 false 或缺失参考图会拒绝，关闭严格模式后才回退到人格文字描述",
                 required=False,
             ),
             ToolParameterInfo("use_outfit_reference", ToolParamType.BOOLEAN, "使用服装参考", required=False),
@@ -338,6 +395,8 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         **kwargs: Any,
     ) -> dict[str, Any]:
         try:
+            if not self.config.references.planner_gallery_management_enabled:
+                raise PermissionError("当前配置已关闭 Planner 参考图库管理；请由管理员使用 /maitu 命令管理参考图库")
             invocation = invocation_context(kwargs)
             self._require_admin(invocation)
             return await self._manage_reference(
@@ -601,7 +660,10 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             assets = self.service.gallery.list_assets(category=category, limit=100)
             if not assets:
                 return "参考图库为空。"
-            return "\n".join(self._format_asset(item) for item in assets)
+            formatted = "\n\n".join(
+                f"{index}. {self._format_asset(item, compact=True)}" for index, item in enumerate(assets, 1)
+            )
+            return f"参考图库（共 {len(assets)} 条）：\n\n{formatted}"
         if not command.args:
             raise CommandParseError(f"参考 {command.action} 需要参考图 ID")
         asset = self.service.gallery.require(command.args[0])
@@ -800,10 +862,48 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             "source_task_id": asset.source_task_id,
         }
 
+    @classmethod
+    def _format_asset(cls, asset: ReferenceAsset, *, compact: bool = False) -> str:
+        """Render reference metadata for administrators without raw JSON noise."""
+
+        status = _ASSET_STATUS_LABELS.get(asset.status.value, asset.status.value)
+        if asset.category == ReferenceCategory.SCENE and asset.status == AssetStatus.ACTIVE and not asset.is_selectable:
+            status = "待审核，尚未确认私密空间资格"
+        lines = [
+            _REFERENCE_CATEGORY_LABELS[asset.category],
+            f"名称：{asset.name}",
+            f"ID：{asset.id}",
+            f"状态：{status}",
+        ]
+        labels = _REFERENCE_TAG_LABELS[asset.category]
+        tags = asset.effective_tags
+        for key, label in labels.items():
+            if key in tags:
+                lines.append(f"{label}：{cls._format_reference_tag_value(key, tags[key], compact=compact)}")
+        extra_tags = {key: value for key, value in tags.items() if key not in labels}
+        if extra_tags:
+            lines.append("其他标签：" + json.dumps(extra_tags, ensure_ascii=False, separators=(",", ":")))
+        if len(lines) == 4:
+            lines.append("标签：暂无有效标签")
+        return "\n".join(lines)
+
     @staticmethod
-    def _format_asset(asset: ReferenceAsset) -> str:
-        tags = json.dumps(asset.effective_tags, ensure_ascii=False, separators=(",", ":"))
-        return f"{asset.id} [{asset.category.value}/{asset.status.value}] {asset.name} tags={tags}"
+    def _format_reference_tag_value(key: str, value: Any, *, compact: bool) -> str:
+        if key == "confidence" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            return f"{float(value):.0%}"
+        if isinstance(value, bool):
+            return "是" if value else "否"
+        if isinstance(value, (list, tuple, set)):
+            return "、".join(_REFERENCE_VALUE_LABELS.get(str(item).casefold(), str(item)) for item in value)
+        text = str(value)
+        translated = _REFERENCE_VALUE_LABELS.get(text.casefold())
+        if translated:
+            return translated
+        if key == "scene_signature":
+            return text.replace("_", " ")
+        if compact and key == "appearance_summary" and len(text) > 120:
+            return text[:117].rstrip() + "..."
+        return text
 
     async def _send_asset(self, asset: ReferenceAsset, stream_id: str) -> None:
         data = base64.b64encode(asset.reference_path.read_bytes()).decode("ascii")

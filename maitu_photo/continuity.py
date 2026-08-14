@@ -193,6 +193,48 @@ class ContinuityManager:
         )
         return self.storage.upsert_continuity(state)
 
+    def attach_backfilled_reference(
+        self,
+        *,
+        scope_key: str,
+        parent_task_id: str,
+        scene_signature: str,
+        category: ReferenceCategory | str,
+        asset_id: str,
+        backfill_task_id: str,
+    ) -> bool:
+        """Bind an automatic reference only while its source photo remains current.
+
+        A background extraction can finish after another photo in the same
+        conversation has updated continuity.  The originating task marker and
+        scene signature prevent that stale result from replacing newer state.
+        """
+
+        category = ReferenceCategory(category)
+        if category not in (ReferenceCategory.OUTFIT, ReferenceCategory.SCENE):
+            return False
+        asset = self.storage.get_reference_asset(asset_id)
+        if asset is None or asset.category != category or not asset.is_selectable:
+            return False
+        state = self.storage.get_continuity(scope_key)
+        if state is None:
+            return False
+        if str(state.metadata.get("task_id") or "") != parent_task_id:
+            return False
+        if normalize_scene_signature(state.scene_signature) != normalize_scene_signature(scene_signature):
+            return False
+
+        current_id = state.outfit_id if category == ReferenceCategory.OUTFIT else state.scene_id
+        if current_id and current_id != asset.id:
+            return False
+        if category == ReferenceCategory.OUTFIT:
+            state.outfit_id = asset.id
+        else:
+            state.scene_id = asset.id
+        state.metadata[f"automatic_{category.value}_backfill_task_id"] = backfill_task_id
+        self.storage.upsert_continuity(state)
+        return True
+
     def pin(
         self,
         scope_key: str,

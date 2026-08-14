@@ -60,7 +60,7 @@ class PluginSection(PluginConfigBase):
     __ui_label__ = "插件与权限"
     __ui_icon__ = "photo_camera"
     config_version: str = Field(
-        default="1.0.0",
+        default="1.1.0",
         description="插件配置版本",
         json_schema_extra=_ui("配置版本", "用于配置迁移，请勿手动修改。"),
     )
@@ -161,9 +161,12 @@ class ModelTaskSection(PluginConfigBase):
         json_schema_extra=_ui("图库选择模型任务", "MaiBot 模型配置中用于场景判断和候选参考图选择的任务名。"),
     )
     max_tokens: int = Field(
-        default=2048,
+        default=6400,
         description="辅助模型最大输出 token 数",
-        json_schema_extra=_ui("最大输出 Token 数", "自动标签、场景判断和图库选择请求允许的最大输出长度。"),
+        json_schema_extra=_ui(
+            "辅助模型最大输出 Token 数",
+            "自动标签、场景判断和图库选择共用的输出上限；设得过低可能截断 JSON，设得过高会增加延迟与模型开销。",
+        ),
     )
     temperature: float = Field(
         default=0.1,
@@ -179,12 +182,22 @@ class ReferenceSection(PluginConfigBase):
     __ui_icon__ = "collections"
     person_reference_enabled: bool = Field(
         default=True,
-        description="含人物写真任务是否默认并强制使用全局人物参考图",
+        description="含人物写真任务是否优先使用全局人物参考图",
         json_schema_extra=_ui(
             "启用写真人物参考",
-            "开启后，含人物的写真任务必须使用已启用的全局人物参考板，并始终作为第一张参考图；"
-            "关闭后，含人物写真改为文字描述人物，不再要求人物参考板。"
+            "开启后，有可用人物参考板时会作为第一张参考图。若同时开启「强制要求人物参考图」，"
+            "没有可用参考板会直接拒绝；否则自动使用 MaiBot 人格设定生成文字人物描述。"
+            "关闭后默认使用人格文字描述；工具显式传 use_person_reference=true 时仍会尝试使用人物参考板。"
             "不含人物的环境照片工具不受此项影响。",
+        ),
+    )
+    require_person_reference: bool = Field(
+        default=True,
+        description="是否禁止人物参考缺失时的人格文字回退",
+        json_schema_extra=_ui(
+            "强制要求人物参考图",
+            "默认开启，以保持人物外貌稳定并兼容旧版本。开启后，含人物写真没有可用人物参考板会直接拒绝；"
+            "关闭后会注入 MaiBot 人格设定作为人物回退。仅在任务通过配置或 use_person_reference 请求人物参考时生效。",
         ),
     )
     outfit_reference_enabled: bool = Field(
@@ -197,10 +210,23 @@ class ReferenceSection(PluginConfigBase):
         description="默认使用场景参考图",
         json_schema_extra=_ui("使用场景参考图", "写真任务仅在合格的室内私密小空间中选择场景参考板。"),
     )
+    planner_gallery_management_enabled: bool = Field(
+        default=False,
+        description="是否允许 Planner 使用参考图库管理工具",
+        json_schema_extra=_ui(
+            "允许 Planner 管理参考图库",
+            "关闭时不会向 Planner 注册 manage_reference_gallery，图库只能由插件管理员通过 /maitu 命令管理。"
+            "开启后会向 Planner 注册工具，但仍只接受 plugin.admin_user_ids 中管理员发起的调用，"
+            "可管理人物、服装和场景参考图，其中包括删除等危险操作。修改此项后必须重载插件，才能更新工具注册。",
+        ),
+    )
     auto_extract_missing: bool = Field(
         default=True,
         description="缺少参考图时是否自动从结果提取",
-        json_schema_extra=_ui("自动补充缺失参考图", "照片使用文字回退后，从成功结果异步提取缺少的服装或场景参考板。"),
+        json_schema_extra=_ui(
+            "自动补充缺失参考图",
+            "照片使用文字回退后，从成功结果异步提取缺少的服装参考板；场景会先根据生成图实际画面复核合格性，再决定是否提取。",
+        ),
     )
     auto_enable_generated_references: bool = Field(
         default=True,
@@ -231,24 +257,30 @@ class ReferenceSection(PluginConfigBase):
 
 
 class ContinuitySection(PluginConfigBase):
-    """按群聊或私聊流隔离的写真服装连续性配置。"""
+    """按群聊或私聊流隔离的服装与场景参考连续性配置。"""
 
-    __ui_label__ = "群聊连续性"
+    __ui_label__ = "参考图连续性"
     __ui_icon__ = "history"
     enabled: bool = Field(
         default=True,
         description="是否启用连续性选择",
-        json_schema_extra=_ui("启用服装连续性", "按群聊记录最近写真，在场景未变化时优先复用同一套服装。"),
+        json_schema_extra=_ui(
+            "启用参考图连续性",
+            "按群聊或私聊流记录最近写真；场景指纹未变化时，优先复用上次的服装和场景参考图。",
+        ),
     )
     ttl_hours: float = Field(
         default=12.0,
-        description="场景未变化时复用服装的有效时长",
-        json_schema_extra=_ui("服装复用时长（小时）", "距本群上一张同场景照片不超过此时长时，优先复用原服装。"),
+        description="场景未变化时复用参考图的有效时长",
+        json_schema_extra=_ui(
+            "参考图复用时长（小时）",
+            "距同一聊天范围上一张同场景照片不超过此时长时，优先复用上次的服装和场景参考图。",
+        ),
     )
     same_local_day: bool = Field(
         default=True,
         description="是否要求处于同一自然日",
-        json_schema_extra=_ui("限制同一自然日", "启用后，即使未超过复用时长，跨自然日也会重新选择服装。"),
+        json_schema_extra=_ui("限制同一自然日", "启用后，即使未超过复用时长，跨自然日也会重新选择服装和场景参考图。"),
     )
     timezone: str = Field(
         default="Asia/Hong_Kong",
@@ -350,13 +382,13 @@ class PromptSection(PluginConfigBase):
     scene_photo_system: str = Field(
         default=(
             "你负责生成像真人用手机随手拍摄的真实照片，画面中不得出现 bot 本人或任何可识别的固定主角。"
-            "优先还原手机摄影的自然感：轻微手持抖动感、真实景深、普通镜头透视、生活化构图与光线，"
+            "优先还原手机摄影的自然感：真实景深、普通镜头透视、生活化构图与光线，"
             "避免棚拍感、海报构图、过度美颜和明显 AI 痕迹。不要添加文字或水印。"
         ),
         description="无人物环境照片系统提示词",
         json_schema_extra=_prompt_ui(
             "无人物环境照片 · 系统提示词",
-            "不含 bot 本人的环境/景物/物品照片发送给生图模型的系统指令。",
+            "不含 bot 本人的环境、景物或物品照片发送给生图模型的系统指令；人物、服装和人格不会注入此类任务。",
         ),
     )
     scene_photo_user: str = Field(
@@ -378,7 +410,8 @@ class PromptSection(PluginConfigBase):
     photo_system: str = Field(
         default=(
             "你负责生成像真人用手机拍摄并发送的真实生活照片。"
-            "严格保持参考人物身份、服装与合格场景的一致性；优先自然手持构图、真实皮肤质感、日常光线与轻微生活瑕疵，"
+            "有参考图时严格保持人物身份、服装与场景空间结构一致；没有参考图时，以 MaiBot 人格文字描述为人物身份依据。"
+            "优先自然手持构图、真实皮肤质感、日常光线与轻微生活瑕疵，"
             "避免棚拍打光、商业海报、过度磨皮和明显 AI 痕迹。不要添加参考图中不存在的文字或水印。"
         ),
         description="含人物写真系统提示词",
@@ -398,7 +431,7 @@ class PromptSection(PluginConfigBase):
             "含人物写真 · 用户提示词",
             "拼在系统提示词后面，发给生图模型。",
             "{description} 规划器填写的完整拍摄需求；"
-            "{person_prompt} 人物参考标签，或「人物文字回退模板」渲染结果；"
+            "{person_prompt} 人物参考标签，或注入 MaiBot 人格设定的「人物文字回退模板」渲染结果；"
             "{outfit_prompt} 服装参考标签或「服装文字回退提示词」；"
             "{scene_prompt} 场景参考标签或「场景文字回退模板」；"
             "{reference_labels} 本次实际传入的参考图角色 JSON；"
@@ -417,26 +450,33 @@ class PromptSection(PluginConfigBase):
         ),
     )
     person_prompt: str = Field(
-        default="保持同一位成年人物的稳定身份特征，只描述五官、发型、肤色、年龄感和面部轮廓，不要描述服装或配饰",
-        description="无人物参考图时使用的人物描述",
+        default=(
+            "保持与 MaiBot 人格设定一致的成年人物身份。只描述五官、发型、肤色、年龄感和面部轮廓，"
+            # Reference images and outfit prompts own clothing, not this fallback identity text.
+            "不要描述服装或配饰。"
+        ),
+        description="无人物参考图时的基础人物描述",
         json_schema_extra=_prompt_ui(
-            "人物文字描述",
-            "人物参考关闭或未使用人物参考板时的面部与身份描述；不要写服装。"
-            "会填入「人物文字回退模板」的 {person_prompt}。",
+            "无参考人物的基础描述",
+            "没有人物参考板时使用的基础外貌约束；会与 MaiBot 昵称和人格设定一起填入「人物文字回退模板」。不要写服装。"
+            "会填入 {person_prompt}。",
         ),
     )
     person_fallback_prompt: str = Field(
-        default="{person_prompt}",
-        description="无人物参考图时的人物提示词模板",
+        default=(
+            "本次没有人物参考图。必须让出镜人物符合 MaiBot 的固定身份与人格，不要随意更换人物。\n"
+            "昵称：{nickname}\n人格设定：{personality}\n基础外貌约束：{person_prompt}"
+        ),
+        description="无人物参考图时的人格人物提示词模板",
         json_schema_extra=_prompt_ui(
-            "人物文字回退模板",
-            "未传入人物参考板时渲染，结果写入写真用户提示词的 {person_prompt}。",
-            "{person_prompt} 上方「人物文字描述」字段。",
-            rows=3,
+            "无参考人物的人格回退模板",
+            "未传入人物参考板时渲染，结果写入写真用户提示词的 {person_prompt}；人格文本来自 MaiBot 主配置。",
+            "{nickname} MaiBot 昵称；{personality} MaiBot 人格设定；{person_prompt} 上方基础人物描述。",
+            rows=5,
         ),
     )
     clothing_style_prompt: str = Field(
-        default="自然合身的日常服装，符合场景和季节，材质与褶皱真实",
+        default="自然合身的日常服装，符合本次地点、季节、活动与人格气质；材质、剪裁和褶皱真实",
         description="无服装参考图时的服装风格提示词",
         json_schema_extra=_prompt_ui(
             "服装文字回退提示词",
@@ -444,7 +484,7 @@ class PromptSection(PluginConfigBase):
         ),
     )
     scene_fallback_prompt: str = Field(
-        default="{scene_hint}",
+        default="按本次拍摄需求还原地点、时间、光线、天气、固定布局与生活氛围：{scene_hint}",
         description="无场景参考图时的场景提示词",
         json_schema_extra=_prompt_ui(
             "场景文字回退模板",
@@ -538,14 +578,14 @@ class PromptSection(PluginConfigBase):
     tag_scene: str = Field(
         default=(
             "请分析场景参考板并只输出符合 Schema 的 JSON："
-            '{{"room_type":"","lighting":[],"time_of_day":"",'
-            '"privacy_eligible":false,"scene_signature":"","confidence":0}}。'
+            '{{"room_type":"","privacy_eligible":false,"scene_signature":"","confidence":0}}。'
+            "privacy_eligible 仅当参考板确实是卧室、浴室、客厅等室内私密小空间时为 true；"
             "confidence 必须是 0 到 1 之间的小数，禁止使用百分制。"
         ),
         description="场景标签提示词",
         json_schema_extra=_prompt_ui(
             "场景自动标签提示词",
-            "视觉模型提取房间类型、光线、时段、资格和场景指纹时使用。",
+            "视觉模型提取房间类型、私密空间资格和稳定场景指纹时使用；时间与光线由每次生图任务自行判断。",
         ),
     )
     scene_eligibility: str = Field(
@@ -553,12 +593,13 @@ class PromptSection(PluginConfigBase):
             "判断目标场景是否属于适合保存参考图的室内私密小空间。卧室、浴室、客厅合格；"
             "咖啡店、商场、街道、办公室等公共或开放场所不合格。只输出 JSON："
             '{{"eligible":false,"scene_signature":"","reason":""}}\n'
-            "场景描述：{scene_hint}\n完整需求：{description}"
+            "场景描述：{scene_hint}\n完整需求：{description}\n"
+            "如附有图片，必须依据图片中的实际场景作出资格判断，而不是仅依据文字描述。"
         ),
         description="目标场景资格与场景指纹判断提示词",
         json_schema_extra=_prompt_ui(
             "场景资格判断提示词",
-            "约束哪些地点可使用或入库场景参考图。",
+            "约束哪些地点可使用或入库场景参考图；自动补库会附带生成结果图并按实际画面判断。",
             "{scene_hint} 规划器传入的场景/地点提示；{description} 规划器填写的完整拍摄需求。",
         ),
     )
@@ -715,8 +756,9 @@ class PromptSection(PluginConfigBase):
             "当需要发送 bot 本人出现在画面中的真实手机照片时使用，例如自拍、被拍、生活随手拍。"
             "插件目标是让你像真人一样发手机照片，而不是插画或海报。"
             "请一次性给出完整详细需求：动作姿势、表情、服装、配饰、地点场景、光线时间、构图远近和氛围。"
-            "若配置启用了人物参考，将强制使用已启用的全局人物参考板作为第一张参考图；"
-            "若配置关闭人物参考，则改用文字人物描述，不再要求人物参考板。"
+            "有可用人物参考板时会优先作为第一张参考图；没有人物参考板时，会自动注入 MaiBot 昵称与人格设定"
+            "生成文字人物描述。"
+            "默认开启「强制要求人物参考图」；关闭该项后，人物参考缺失才会使用文字回退。"
             "会积极复用本聊天近期同场景服装，并仅在合格室内私密小空间使用场景参考。"
             "工具立即返回 task_id，异步生成并发送；同一需求不要重复提交。"
         ),
@@ -781,7 +823,10 @@ class PromptSection(PluginConfigBase):
         ),
     )
     generate_photo_use_person_reference: str = Field(
-        default="是否使用人物参考；人物参考配置开启时只能省略或 true，传 false 会拒绝",
+        default=(
+            "是否尝试使用人物参考；省略时按配置决定，默认严格模式下缺失参考图会拒绝，"
+            "关闭严格模式后才回退到 MaiBot 人格文字描述"
+        ),
         description="含人物写真工具 use_person_reference 参数说明",
         json_schema_extra=_tool_text_ui(
             "含人物写真工具 · 参数 use_person_reference",
@@ -845,7 +890,7 @@ class PromptSection(PluginConfigBase):
     )
 
     gallery_brief: str = Field(
-        default="管理员查询或维护人物、服装和场景参考图库",
+        default="查询或维护人物、服装和场景参考图库",
         description="图库管理工具简短描述",
         json_schema_extra=_tool_text_ui(
             "图库管理工具 · 简短描述",
@@ -854,7 +899,11 @@ class PromptSection(PluginConfigBase):
         ),
     )
     gallery_detailed: str = Field(
-        default="仅插件管理员可用。提取、导入、重标和重生成操作会创建后台任务；删除需要五分钟有效的确认令牌。",
+        default=(
+            "需在参考图库配置中显式开启 Planner 图库管理后才会提供此工具，且调用上下文必须属于插件管理员。"
+            "关闭时请由插件管理员使用 /maitu 命令管理。提取、导入、重标和重生成会创建后台任务；"
+            "删除需要五分钟有效的确认令牌。"
+        ),
         description="图库管理工具详细描述",
         json_schema_extra=_tool_text_ui(
             "图库管理工具 · 详细描述",

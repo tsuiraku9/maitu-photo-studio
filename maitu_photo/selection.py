@@ -147,8 +147,6 @@ class ReferenceSelector:
             scene = self.gallery.get(explicit_scene_id)
             if scene is None or not scene.is_selectable or scene.category != ReferenceCategory.SCENE:
                 raise ValueError(f"场景参考图不可用: {explicit_scene_id}")
-            if scene.effective_tags.get("privacy_eligible") is False:
-                raise ValueError(f"场景参考图不符合私密空间约束: {explicit_scene_id}")
             reasons["scene"] = "explicit"
 
         previous = self.continuity.get(scope_key)
@@ -194,7 +192,7 @@ class ReferenceSelector:
             else [
                 item
                 for item in self.gallery.candidates("scene", include_disabled=False)
-                if item.id not in excluded_scenes and item.effective_tags.get("privacy_eligible", True) is not False
+                if item.id not in excluded_scenes
             ]
         )
         # Matching tags remain the primary signal.  When several references
@@ -243,7 +241,6 @@ class ReferenceSelector:
                         and candidate.id in {item.id for item in scene_candidates}
                         and candidate.is_selectable
                         and candidate.category == ReferenceCategory.SCENE
-                        and candidate.effective_tags.get("privacy_eligible", True) is not False
                     ):
                         scene = candidate
                         reasons["scene"] = "llm"

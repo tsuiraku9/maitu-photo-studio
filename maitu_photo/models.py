@@ -40,6 +40,19 @@ class ReferenceCategory(StrEnum):
     SCENE = "scene"
 
 
+_SCENE_GENERATION_TAG_FIELDS = frozenset({"light", "lighting", "time_of_day"})
+
+
+def normalize_reference_tags(category: ReferenceCategory | str, tags: Mapping[str, Any] | None) -> JsonObject:
+    """Remove scene attributes that belong to an individual generation, not a reference model."""
+
+    normalized = dict(tags or {})
+    if ReferenceCategory(category) == ReferenceCategory.SCENE:
+        for field_name in _SCENE_GENERATION_TAG_FIELDS:
+            normalized.pop(field_name, None)
+    return normalized
+
+
 class AssetStatus(StrEnum):
     ACTIVE = "active"
     DISABLED = "disabled"
@@ -85,6 +98,8 @@ class ReferenceAsset:
         self.source_path = Path(self.source_path)
         self.reference_path = Path(self.reference_path)
         self.sha256 = self.sha256.lower().strip()
+        self.tags = normalize_reference_tags(self.category, self.tags)
+        self.manual_tags = normalize_reference_tags(self.category, self.manual_tags)
         if not self.name.strip():
             raise ValueError("reference asset name must not be empty")
         if not self.sha256:
@@ -98,11 +113,15 @@ class ReferenceAsset:
 
         result = dict(self.tags)
         result.update(self.manual_tags)
-        return result
+        return normalize_reference_tags(self.category, result)
 
     @property
     def is_selectable(self) -> bool:
-        return self.status == AssetStatus.ACTIVE and self.deleted_at is None
+        if self.status != AssetStatus.ACTIVE or self.deleted_at is not None:
+            return False
+        # A scene board must be explicitly verified as a private indoor space.
+        # Older unverified rows stay review-only until an administrator retags them.
+        return self.category != ReferenceCategory.SCENE or self.effective_tags.get("privacy_eligible") is True
 
     def as_selection_metadata(self) -> JsonObject:
         """Return a prompt-safe metadata projection without local paths."""
