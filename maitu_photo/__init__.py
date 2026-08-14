@@ -1,4 +1,4 @@
-"""MaiTu photo generation plugin package."""
+"""麦麦写真插件包。"""
 
 from .config import PhotoPluginConfig
 

@@ -1,4 +1,4 @@
-"""Configuration models for the MaiTu photo plugin.
+"""麦麦写真插件的配置模型。
 
 The module deliberately keeps all user-editable LLM text in the configuration
 model.  MaiBot's runner turns these models into the WebUI schema and persists
@@ -1155,9 +1155,9 @@ class PromptSection(PluginConfigBase):
 
 
 class PhotoPluginConfig(PluginConfigBase):
-    """MaiTu 写真插件的完整配置。"""
+    """麦麦写真插件的完整配置。"""
 
-    __ui_label__ = "写真插件配置"
+    __ui_label__ = "麦麦写真配置"
     plugin: PluginSection = Field(default_factory=PluginSection, description="插件开关、命令与管理员权限")
     openai: OpenAISection = Field(default_factory=OpenAISection, description="OpenAI 兼容生图服务")
     model_tasks: ModelTaskSection = Field(default_factory=ModelTaskSection, description="MaiBot 辅助模型任务")

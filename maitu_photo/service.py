@@ -980,7 +980,7 @@ class PhotoStudioService:
         delivered_at = latest.sent_at or utc_now()
         reference_text = ",".join(f"{item.role}:{item.asset_id or 'text'}" for item in references)
         visible = (
-            f"写真任务已发送：task_id={task.id}，类型={task.kind}，"
+            f"麦麦写真任务已发送：task_id={task.id}，类型={task.kind}，"
             f"参考图={reference_text}，"
             f"结果摘要={latest.prompt_summary}，投递时间={delivered_at.isoformat()}"
         )
@@ -1012,7 +1012,7 @@ class PhotoStudioService:
             return
         metadata = task.result_metadata
         try:
-            visible = f"写真任务失败：task_id={task.id}，类型={task.kind}，错误={error}"
+            visible = f"麦麦写真任务失败：task_id={task.id}，类型={task.kind}，错误={error}"
             if not metadata.get("failure_context_appended"):
                 append_result = await self.ctx.maisaka.context.append(
                     stream_id=task.stream_id,

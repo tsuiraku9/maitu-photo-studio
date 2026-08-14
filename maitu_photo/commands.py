@@ -169,7 +169,7 @@ def help_text(prefix: str = "/maitu") -> str:
     p = prefix.strip().rstrip("/")
     return "\n".join(
         [
-            "写真插件管理员命令：",
+            "麦麦写真插件管理员命令：",
             f"{p} 帮助",
             f"{p} 诊断",
             f"{p} 人物 查看",

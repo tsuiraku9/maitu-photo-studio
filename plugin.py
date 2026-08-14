@@ -1,4 +1,4 @@
-"""MaiBot entry point for the MaiTu photo plugin."""
+"""麦麦写真插件的 MaiBot 入口。"""
 
 from __future__ import annotations
 
@@ -136,7 +136,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         data_dir = Path(self.ctx.paths.data_dir)
         self._service = PhotoStudioService(self.ctx, self.config, data_dir)
         await self._service.start()
-        self.ctx.logger.info("写真插件已加载，数据目录=%s", data_dir)
+        self.ctx.logger.info("麦麦写真插件已加载，数据目录=%s", data_dir)
 
     async def on_unload(self) -> None:
         if self._service is not None:
@@ -157,7 +157,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         self._service = PhotoStudioService(self.ctx, self.config, self.ctx.paths.data_dir)
         await self._service.start()
         self.ctx.logger.info(
-            "写真插件运行配置已热更新(version=%s)；工具描述或命令前缀变更需重载插件",
+            "麦麦写真插件运行配置已热更新(version=%s)；工具描述或命令前缀变更需重载插件",
             version,
         )
 
@@ -191,7 +191,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             if name == "maitu_admin":
                 prefix = config.plugin.command_prefix.strip().rstrip("/") or "/maitu"
                 metadata["command_pattern"] = rf"^{re.escape(prefix)}(?:\s+.*)?$"
-                metadata["description"] = f"{prefix} 写真插件管理员命令"
+                metadata["description"] = f"{prefix} 麦麦写真插件管理员命令"
         return components
 
     @staticmethod
@@ -440,7 +440,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
 
     @Command(
         "maitu_admin",
-        description="写真插件管理员命令",
+        description="麦麦写真插件管理员命令",
         pattern=r"^/maitu(?:\s+.*)?$",
     )
     async def handle_admin_command(self, **kwargs: Any) -> tuple[bool, str, int]:
@@ -786,7 +786,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         queued = self.service.storage.list_tasks(statuses=(TaskStatus.QUEUED,), limit=10_000)
         return "\n".join(
             [
-                "写真插件诊断：",
+                "麦麦写真插件诊断：",
                 f"插件启用：{self.config.plugin.enabled}",
                 f"管理员数量：{len(self.config.plugin.admin_user_ids)}",
                 f"Provider Base URL 已配置：{bool(self.config.openai.base_url.strip())}",
@@ -807,11 +807,11 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
 
     def _require_enabled(self) -> None:
         if not self.config.plugin.enabled:
-            raise ValueError("写真插件当前已停用")
+            raise ValueError("麦麦写真插件当前已停用")
 
     def _require_admin(self, invocation: InvocationContext) -> None:
         if not invocation.is_admin(self.config.plugin.admin_user_ids):
-            raise PermissionError("只有写真插件管理员可以执行此操作")
+            raise PermissionError("只有麦麦写真插件管理员可以执行此操作")
 
     def _resolve_asset(
         self,

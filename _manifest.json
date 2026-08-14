@@ -2,8 +2,8 @@
   "manifest_version": 2,
   "id": "maitu.photo-studio",
   "version": "0.1.0",
-  "name": "MaiTu 写真",
-  "description": "让 bot 像真人一样发送手机拍摄的真实照片：含人物写真、无人物环境照、参考图库与群聊连续性。",
+  "name": "麦麦写真",
+  "description": "让麦麦更真实地发送照片：真实照片生成、人物/服装/场景参考图库与聊天连续性。",
   "author": {
     "name": "tsuiraku9",
     "url": "https://github.com/tsuiraku9"
@@ -49,4 +49,3 @@
     "supported_locales": ["zh-CN"]
   }
 }
-

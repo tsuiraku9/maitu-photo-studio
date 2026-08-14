@@ -1,12 +1,10 @@
-# 麦麦写真
-
-> 📷 让麦麦更真实的发送照片
+# 麦麦写真 · 让麦麦更真实的发送照片
 >
 > **⚠️ 免责声明**：本插件由 AI 辅助生成，代码可能存在未知缺陷或不当行为。使用前请自行审阅源码、评估风险，并对其在你的环境中产生的任何后果负责。
 >
 > **💳 额度提醒**：启用照片工具调用建议、自动补库或频繁使用生图功能，可能增加图片生成模型的调用次数并消耗更多服务商额度。请根据服务商的计费规则控制使用频率。
 
-`麦麦写真` 是面向 MaiBot 的异步真实手机照片插件（MaiBot 配置页显示为 `MaiTu 写真`，Manifest ID：`maitu.photo-studio`）。它把 Planner 的一次“发张照片”请求变成可持久化、可追踪的后台任务：根据聊天语境生成自然的生活照片，在成功后投递回原聊天。
+`麦麦写真` 是面向 MaiBot 的异步真实手机照片插件（Manifest ID：`maitu.photo-studio`）。它把 Planner 的一次“发张照片”请求变成可持久化、可追踪的后台任务：根据聊天语境生成自然的生活照片，在成功后投递回原聊天。
 
 ## 核心卖点
 
@@ -139,7 +137,7 @@ python -m pip install -e ".[dev]"
 
 ## 首次使用
 
-1. 在 MaiBot 加载或重载插件，然后打开 WebUI 的 `MaiTu 写真` 配置页。
+1. 在 MaiBot 加载或重载插件，然后打开 WebUI 的 `麦麦写真` 配置页。
 2. 配置 `plugin.admin_user_ids`。只有这里列出的用户可以执行 `/maitu` 管理命令和受限图库操作。
 3. 配置 `openai.base_url`、`openai.api_key`、`openai.generation_model`、`openai.reference_model`、两种接口模式，以及 MaiBot 的 `model_tasks.tagging_task_name`（通常为 `vlm`）和 `model_tasks.selection_task_name`（通常为 `utils`）。
 4. 保存后重载插件，再由管理员执行：
