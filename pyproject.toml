@@ -20,6 +20,12 @@ dev = [
     "ruff>=0.12",
 ]
 
+[tool.setuptools]
+py-modules = ["plugin"]
+
+[tool.setuptools.packages.find]
+include = ["maitu_photo*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

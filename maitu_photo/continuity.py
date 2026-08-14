@@ -21,12 +21,19 @@ class ContinuityError(RuntimeError):
 
 
 def make_scope_key(*, group_id: str | int | None = None, stream_id: str | int | None = None) -> str:
-    """Build an isolation key, preferring a group over a private stream."""
+    """Build an isolation key from MaiBot's canonical chat stream.
 
-    if group_id is not None and str(group_id).strip():
-        return f"group:{str(group_id).strip()}"
+    ``stream_id`` is derived by MaiBot from the platform, account, route scope,
+    and chat target.  It must therefore take precedence over a bare group ID;
+    using ``group_id`` first would merge same-numbered groups across platforms.
+    The group fallback remains for older direct callers that do not have a
+    canonical stream ID yet.
+    """
+
     if stream_id is not None and str(stream_id).strip():
         return f"stream:{str(stream_id).strip()}"
+    if group_id is not None and str(group_id).strip():
+        return f"group:{str(group_id).strip()}"
     raise ValueError("group_id or stream_id is required")
 
 

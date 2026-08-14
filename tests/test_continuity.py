@@ -36,8 +36,9 @@ def _setup(tmp_path: Path):
     return storage, gallery, outfit, scene
 
 
-def test_scope_key_prefers_group_and_private_stream_fallback() -> None:
-    assert make_scope_key(group_id=123, stream_id=456) == "group:123"
+def test_scope_key_prefers_canonical_stream_and_uses_group_fallback() -> None:
+    assert make_scope_key(group_id=123, stream_id=456) == "stream:456"
+    assert make_scope_key(group_id=123) == "group:123"
     assert make_scope_key(stream_id=" dm-1 ") == "stream:dm-1"
     with pytest.raises(ValueError):
         make_scope_key()

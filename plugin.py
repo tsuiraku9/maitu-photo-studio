@@ -172,8 +172,12 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             config = self.config
         except RuntimeError:
             config = PhotoPluginConfig()
-        if not config.references.planner_gallery_management_enabled:
-            components = [component for component in components if component.get("name") != "manage_reference_gallery"]
+        # MaiBot's ToolExecutionContext currently supplies the stream routing
+        # fields to a plugin, but not an unforgeable caller identity.  Keep the
+        # gallery mutator available to the explicit /maitu command only; an
+        # LLM-produced tool call must never be able to authorize itself by
+        # supplying ``user_id``/``platform`` fields.
+        components = [component for component in components if component.get("name") != "manage_reference_gallery"]
         sections = {
             "generate_scene_photo": config.prompts.generate_scene_photo_tool,
             "generate_photo": config.prompts.generate_photo_tool,
@@ -188,6 +192,8 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             section = sections.get(name)
             if section is not None:
                 self._patch_tool_metadata(metadata, section)
+            if str(component.get("type") or "").casefold() == "tool":
+                self._harden_tool_metadata(metadata)
             if name == "maitu_admin":
                 prefix = config.plugin.command_prefix.strip().rstrip("/") or "/maitu"
                 metadata["command_pattern"] = rf"^{re.escape(prefix)}(?:\s+.*)?$"
@@ -216,6 +222,67 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 schema = properties.get(name) if isinstance(properties, dict) else None
                 if isinstance(schema, dict):
                     schema["description"] = description
+
+    @staticmethod
+    def _harden_tool_metadata(metadata: dict[str, Any]) -> None:
+        """Bind tool calls to the host-selected stream and close extra args.
+
+        The MaiBot 1.1.x host uses ``plugin.invoke_action`` to overwrite the
+        stream ID from its trusted execution context.  The regular
+        ``plugin.invoke_tool`` path only fills missing fields, so an LLM could
+        otherwise supply a different stream ID.  Rebuilding the parameter
+        schema also tells model providers to reject undeclared context fields.
+        """
+
+        metadata["invoke_method"] = "plugin.invoke_action"
+        parameters = metadata.get("parameters")
+        if not isinstance(parameters, list):
+            return
+
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        for parameter in parameters:
+            if not isinstance(parameter, dict):
+                continue
+            name = str(parameter.get("name") or "").strip()
+            if not name:
+                continue
+            schema: dict[str, Any] = {
+                "type": str(parameter.get("param_type") or "string"),
+            }
+            description = str(parameter.get("description") or "").strip()
+            if description:
+                schema["description"] = description
+            enum_values = parameter.get("enum_values")
+            if isinstance(enum_values, list) and enum_values:
+                schema["enum"] = list(enum_values)
+            items_schema = parameter.get("items_schema")
+            if isinstance(items_schema, dict):
+                schema["items"] = dict(items_schema)
+            nested_properties = parameter.get("properties")
+            if isinstance(nested_properties, dict):
+                schema["properties"] = dict(nested_properties)
+            required_properties = parameter.get("required_properties")
+            if isinstance(required_properties, list) and required_properties:
+                schema["required"] = list(required_properties)
+            additional_properties = parameter.get("additional_properties")
+            if additional_properties is not None:
+                schema["additionalProperties"] = additional_properties
+            default = parameter.get("default")
+            if default is not None:
+                schema["default"] = default
+            properties[name] = schema
+            if bool(parameter.get("required")):
+                required.append(name)
+
+        raw_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": properties,
+            "additionalProperties": False,
+        }
+        if required:
+            raw_schema["required"] = required
+        metadata["parameters_raw"] = raw_schema
 
     @Tool(
         "generate_scene_photo",
@@ -395,6 +462,12 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         **kwargs: Any,
     ) -> dict[str, Any]:
         try:
+            # This handler is retained for old direct callers, but the
+            # component is intentionally not exposed as an LLM Tool.  A
+            # genuine command invocation includes the host message payload;
+            # a tool RPC does not and cannot authenticate its caller here.
+            if not isinstance(kwargs.get("message"), Mapping):
+                raise PermissionError("图库管理请由管理员使用 /maitu 命令")
             if not self.config.references.planner_gallery_management_enabled:
                 raise PermissionError("当前配置已关闭 Planner 参考图库管理；请由管理员使用 /maitu 命令管理参考图库")
             invocation = invocation_context(kwargs)
@@ -433,7 +506,9 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 invocation,
                 task_id,
                 include_image=bool(include_image),
-                is_admin=invocation.is_admin(self.config.plugin.admin_user_ids),
+                # Tool calls are scoped to the host-selected stream; caller
+                # identity is intentionally unavailable on the Tool RPC path.
+                is_admin=False,
             )
         except Exception as exc:
             return self._tool_error(exc)

@@ -19,6 +19,7 @@ def _message(image_values: list[bytes], *, message_id: str = "m1") -> dict:
     return {
         "message_id": message_id,
         "session_id": "stream-1",
+        "platform": "qq",
         "message_info": {
             "user_info": {"user_id": "admin"},
             "group_info": {"group_id": "group-1"},
@@ -68,11 +69,82 @@ class _Context:
         return None
 
 
-def test_invocation_context_prefers_group_scope_and_checks_admin() -> None:
+def test_invocation_context_uses_canonical_stream_scope_and_checks_admin() -> None:
     invocation = invocation_context({"stream_id": "stream-1", "message": _message([])})
-    assert invocation.scope_key == "group:group-1"
+    assert invocation.scope_key == "stream:stream-1"
     assert invocation.user_id == "admin"
-    assert invocation.is_admin(["someone", "admin"]) is True
+    assert invocation.platform == "qq"
+    assert invocation.is_admin(["someone", "admin"]) is False
+    assert invocation.is_admin(["discord:admin"]) is False
+    assert invocation.is_admin(["qq:admin"]) is True
+
+
+def test_message_context_wins_over_conflicting_top_level_identity() -> None:
+    invocation = invocation_context(
+        {
+            "stream_id": "spoofed-stream",
+            "platform": "discord",
+            "user_id": "attacker",
+            "group_id": "spoofed-group",
+            "message": _message([]),
+        }
+    )
+
+    assert invocation.stream_id == "stream-1"
+    assert invocation.platform == "qq"
+    assert invocation.user_id == "admin"
+    assert invocation.group_id == "group-1"
+
+
+def test_action_tool_context_uses_host_stream_and_discards_untrusted_identity() -> None:
+    invocation = invocation_context(
+        {
+            "action_data": {
+                "stream_id": "spoofed-stream",
+                "platform": "qq",
+                "user_id": "admin",
+            },
+            "stream_id": "host-stream",
+            "chat_id": "host-stream",
+            "platform": "qq",
+            "user_id": "admin",
+            "group_id": "group-1",
+            "message": _message([]),
+        }
+    )
+
+    assert invocation.scope_key == "stream:host-stream"
+    assert invocation.user_id == ""
+    assert invocation.platform == ""
+    assert invocation.group_id is None
+    assert invocation.message == {}
+    assert invocation.is_admin(["admin", "qq:admin"]) is False
+
+
+def test_legacy_context_without_platform_accepts_bare_admin_id() -> None:
+    invocation = invocation_context({"stream_id": "legacy-stream", "user_id": "admin"})
+
+    assert invocation.platform == ""
+    assert invocation.is_admin(["admin"]) is True
+
+
+def test_same_group_id_on_different_streams_stays_isolated() -> None:
+    first = invocation_context(
+        {
+            "stream_id": "qq-stream",
+            "message": {"message_info": {"group_info": {"group_id": "same-group"}}},
+        }
+    )
+    second = invocation_context(
+        {
+            "stream_id": "discord-stream",
+            "message": {"message_info": {"group_info": {"group_id": "same-group"}}},
+        }
+    )
+
+    assert first.scope_key == "stream:qq-stream"
+    assert second.scope_key == "stream:discord-stream"
+    assert first.scope_key != second.scope_key
 
 
 def test_current_and_replied_message_image_resolution() -> None:

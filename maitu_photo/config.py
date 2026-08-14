@@ -60,7 +60,7 @@ class PluginSection(PluginConfigBase):
     __ui_label__ = "插件与权限"
     __ui_icon__ = "photo_camera"
     config_version: str = Field(
-        default="1.1.0",
+        default="1.3.0",
         description="插件配置版本",
         json_schema_extra=_ui("配置版本", "用于配置迁移，请勿手动修改。"),
     )
@@ -77,7 +77,10 @@ class PluginSection(PluginConfigBase):
     admin_user_ids: list[str] = Field(
         default_factory=list,
         description="允许管理图库的用户 ID",
-        json_schema_extra=_ui("管理员用户 ID", "填写可使用图库管理和全部 /maitu 命令的用户 ID；每项填写一个 ID。"),
+        json_schema_extra=_ui(
+            "管理员用户 ID",
+            "填写 platform:user_id（例如 qq:123456）；旧版宿主未提供 platform 时才使用裸 ID。每项填写一个 ID。",
+        ),
     )
 
     def model_post_init(self, __context: Any) -> None:
@@ -212,12 +215,12 @@ class ReferenceSection(PluginConfigBase):
     )
     planner_gallery_management_enabled: bool = Field(
         default=False,
-        description="是否允许 Planner 使用参考图库管理工具",
+        description="兼容旧配置保留；当前不允许 Planner 使用参考图库管理工具",
         json_schema_extra=_ui(
-            "允许 Planner 管理参考图库",
-            "关闭时不会向 Planner 注册 manage_reference_gallery，图库只能由插件管理员通过 /maitu 命令管理。"
-            "开启后会向 Planner 注册工具，但仍只接受 plugin.admin_user_ids 中管理员发起的调用，"
-            "可管理人物、服装和场景参考图，其中包括删除等危险操作。修改此项后必须重载插件，才能更新工具注册。",
+            "旧版 Planner 图库开关（停用）",
+            "为兼容旧配置保留。当前 MaiBot 工具调用无法向插件提供不可伪造的调用者身份，"
+            "因此无论此项取值如何都不会注册 manage_reference_gallery；"
+            "请由 plugin.admin_user_ids 中的管理员使用 /maitu 命令管理图库。",
         ),
     )
     auto_extract_missing: bool = Field(
@@ -900,9 +903,8 @@ class PromptSection(PluginConfigBase):
     )
     gallery_detailed: str = Field(
         default=(
-            "需在参考图库配置中显式开启 Planner 图库管理后才会提供此工具，且调用上下文必须属于插件管理员。"
-            "关闭时请由插件管理员使用 /maitu 命令管理。提取、导入、重标和重生成会创建后台任务；"
-            "删除需要五分钟有效的确认令牌。"
+            "当前版本不会向 Planner 提供图库写工具，请由插件管理员使用 /maitu 命令管理。"
+            "提取、导入、重标和重生成会创建后台任务；删除需要五分钟有效的确认令牌。"
         ),
         description="图库管理工具详细描述",
         json_schema_extra=_tool_text_ui(

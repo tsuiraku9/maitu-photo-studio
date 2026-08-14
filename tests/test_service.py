@@ -14,7 +14,7 @@ from maitu_photo.config import PhotoPluginConfig
 from maitu_photo.models import ImageTask, ReferenceCategory, TaskStatus
 from maitu_photo.provider import GeneratedImage
 from maitu_photo.runtime import InvocationContext
-from maitu_photo.service import PhotoStudioError, PhotoStudioService
+from maitu_photo.service import PhotoStudioError, PhotoStudioService, TaskAccessError
 
 
 def _png(colour: str) -> bytes:
@@ -128,12 +128,12 @@ def _config() -> PhotoPluginConfig:
     return config
 
 
-def _invocation() -> InvocationContext:
+def _invocation(*, stream_id: str = "stream-1", group_id: str = "group-1") -> InvocationContext:
     return InvocationContext(
-        stream_id="stream-1",
-        scope_key="group:group-1",
+        stream_id=stream_id,
+        scope_key=f"stream:{stream_id}",
         user_id="user-1",
-        group_id="group-1",
+        group_id=group_id,
         message_id="message-1",
         message={},
     )
@@ -144,6 +144,19 @@ def _scene_photo_llm_replies(signature: str = "generic-scene") -> list[dict]:
         {"eligible": False, "scene_signature": signature, "reason": "not private"},
         {"scene_signature": signature, "changed": False},
     ]
+
+
+def test_task_lookup_rejects_same_group_on_another_canonical_stream(tmp_path: Path) -> None:
+    service = PhotoStudioService(_Context([]), _config(), tmp_path)
+    first = _invocation(stream_id="qq-stream", group_id="same-group")
+    second = _invocation(stream_id="discord-stream", group_id="same-group")
+    task = service.storage.create_task(ImageTask(kind="scene_photo", scope_key=first.scope_key))
+
+    assert service.get_task_for(first, task.id) == task
+    with pytest.raises(TaskAccessError, match="其他聊天"):
+        service.get_task_for(second, task.id)
+
+    asyncio.run(service.close())
 
 
 def test_scene_photo_generation_persists_sends_and_notifies_planner(tmp_path: Path) -> None:

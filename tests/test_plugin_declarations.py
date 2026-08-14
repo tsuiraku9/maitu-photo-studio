@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from maitu_photo.config import PhotoPluginConfig
@@ -14,6 +15,13 @@ def _inject_config(plugin: MaiTuPhotoPlugin, config: PhotoPluginConfig) -> None:
         plugin.set_plugin_config(config.model_dump(mode="python"))  # type: ignore[attr-defined]
     else:
         plugin._config = config  # type: ignore[attr-defined]
+
+
+def test_manifest_declares_host_config_capability() -> None:
+    manifest = json.loads((Path(__file__).parents[1] / "_manifest.json").read_text(encoding="utf-8"))
+
+    assert "config.get" in manifest["capabilities"]
+    assert manifest["host_application"]["min_version"] == "1.1.4"
 
 
 def test_component_metadata_uses_configured_descriptions_and_prefix() -> None:
@@ -30,6 +38,10 @@ def test_component_metadata_uses_configured_descriptions_and_prefix() -> None:
     assert scene_tool["description"] == "custom scene photo tool"
     parameters = {item["name"]: item for item in scene_tool["parameters"]}
     assert parameters["description"]["description"] == "custom description field"
+    assert scene_tool["invoke_method"] == "plugin.invoke_action"
+    assert scene_tool["parameters_raw"]["additionalProperties"] is False
+    assert scene_tool["parameters_raw"]["properties"]["description"]["description"] == "custom description field"
+    assert "stream_id" not in scene_tool["parameters_raw"]["properties"]
     assert components["maitu_admin"]["metadata"]["command_pattern"] == r"^/photo(?:\s+.*)?$"
 
 
@@ -46,13 +58,13 @@ def test_components_can_be_discovered_before_config_injection() -> None:
     }
 
 
-def test_gallery_tool_is_registered_when_planner_management_is_enabled() -> None:
+def test_gallery_tool_stays_hidden_when_legacy_planner_management_flag_is_enabled() -> None:
     config = PhotoPluginConfig()
     config.references.planner_gallery_management_enabled = True
     plugin = MaiTuPhotoPlugin()
     _inject_config(plugin, config)
 
-    assert "manage_reference_gallery" in {item["name"] for item in plugin.get_components()}
+    assert "manage_reference_gallery" not in {item["name"] for item in plugin.get_components()}
 
 
 def test_gallery_tool_rejects_calls_when_planner_management_is_disabled() -> None:
@@ -62,6 +74,7 @@ def test_gallery_tool_rejects_calls_when_planner_management_is_disabled() -> Non
     message = {
         "message_id": "m1",
         "session_id": "s1",
+        "platform": "qq",
         "message_info": {"user_info": {"user_id": "ordinary"}},
     }
 
@@ -79,13 +92,14 @@ def test_gallery_tool_rejects_calls_when_planner_management_is_disabled() -> Non
 
 def test_gallery_tool_rejects_non_admin_when_planner_management_is_enabled() -> None:
     config = PhotoPluginConfig()
-    config.plugin.admin_user_ids = ["admin"]
+    config.plugin.admin_user_ids = ["qq:admin"]
     config.references.planner_gallery_management_enabled = True
     plugin = MaiTuPhotoPlugin()
     _inject_config(plugin, config)
     message = {
         "message_id": "m1",
         "session_id": "s1",
+        "platform": "qq",
         "message_info": {"user_info": {"user_id": "ordinary"}},
     }
 
@@ -103,13 +117,14 @@ def test_gallery_tool_rejects_non_admin_when_planner_management_is_enabled() -> 
 
 def test_gallery_tool_allows_admin_when_planner_management_is_enabled() -> None:
     config = PhotoPluginConfig()
-    config.plugin.admin_user_ids = ["admin"]
+    config.plugin.admin_user_ids = ["qq:admin"]
     config.references.planner_gallery_management_enabled = True
     plugin = MaiTuPhotoPlugin()
     _inject_config(plugin, config)
     message = {
         "message_id": "m1",
         "session_id": "s1",
+        "platform": "qq",
         "message_info": {"user_info": {"user_id": "admin"}},
     }
 
@@ -126,6 +141,27 @@ def test_gallery_tool_allows_admin_when_planner_management_is_enabled() -> None:
     )
 
     assert result == {"success": True, "operation": "list"}
+
+
+def test_gallery_tool_rejects_action_rpc_even_with_spoofed_admin_fields() -> None:
+    config = PhotoPluginConfig()
+    config.plugin.admin_user_ids = ["qq:admin"]
+    config.references.planner_gallery_management_enabled = True
+    plugin = MaiTuPhotoPlugin()
+    _inject_config(plugin, config)
+
+    result = asyncio.run(
+        plugin.handle_manage_reference_gallery(
+            operation="list",
+            action_data={"operation": "list", "platform": "qq", "user_id": "admin"},
+            stream_id="trusted-stream",
+            platform="qq",
+            user_id="admin",
+        )
+    )
+
+    assert result["success"] is False
+    assert "/maitu" in result["error"]
 
 
 def test_invocation_falls_back_to_private_stream_scope() -> None:

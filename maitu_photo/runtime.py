@@ -27,41 +27,88 @@ class InvocationContext:
     group_id: str | None
     message_id: str
     message: Mapping[str, Any]
+    platform: str = ""
 
     def is_admin(self, configured_ids: Sequence[str]) -> bool:
-        allowed = {str(item).strip() for item in configured_ids if str(item).strip()}
-        return bool(self.user_id and self.user_id in allowed)
+        user_id = self.user_id.strip()
+        if not user_id:
+            return False
+        platform = self.platform.strip()
+        for item in configured_ids:
+            configured = str(item).strip()
+            if not configured:
+                continue
+            if ":" in configured:
+                configured_platform, configured_user_id = configured.split(":", 1)
+                if (
+                    platform
+                    and configured_platform.strip().casefold() == platform.casefold()
+                    and configured_user_id.strip() == user_id
+                ):
+                    return True
+            elif not platform and configured == user_id:
+                # Older hosts did not include platform in tool context.
+                return True
+        return False
 
 
 def invocation_context(kwargs: Mapping[str, Any]) -> InvocationContext:
-    message_value = kwargs.get("message")
+    # MaiBot's ``plugin.invoke_action`` route appends ``action_data`` and
+    # force-overwrites the stream ID from its trusted ToolExecutionContext.
+    # It does not currently provide a trusted caller identity to plugins,
+    # however, so never treat model-controlled action arguments as a user,
+    # platform, group, or message context.  This keeps action-routed tools
+    # scoped to the host-selected stream while making admin checks fail closed.
+    action_invocation = isinstance(kwargs.get("action_data"), Mapping)
+    message_value = None if action_invocation else kwargs.get("message")
     message = message_value if isinstance(message_value, Mapping) else {}
     message_info = _mapping(message.get("message_info"))
     user_info = _mapping(message_info.get("user_info"))
     group_info = _mapping(message_info.get("group_info"))
 
-    stream_id = _first_text(
-        kwargs.get("stream_id"),
-        message.get("stream_id"),
-        message.get("session_id"),
-    )
+    if action_invocation:
+        platform = ""
+        stream_id = _first_text(
+            kwargs.get("stream_id"),
+            kwargs.get("chat_id"),
+            kwargs.get("session_id"),
+        )
+        user_id = ""
+        group_id = ""
+        message_id = ""
+    else:
+        # A real command/message payload carries the host's canonical values
+        # inside ``message``.  Prefer those nested values when duplicate
+        # top-level fields are present, avoiding accidental caller override.
+        platform = _first_text(
+            message.get("platform"),
+            message_info.get("platform"),
+            kwargs.get("platform"),
+        )
+        stream_id = _first_text(
+            message.get("stream_id"),
+            message.get("session_id"),
+            kwargs.get("stream_id"),
+            kwargs.get("chat_id"),
+            kwargs.get("session_id"),
+        )
+        user_id = _first_text(
+            user_info.get("user_id"),
+            message.get("user_id"),
+            kwargs.get("user_id"),
+        )
+        group_id = _first_text(
+            group_info.get("group_id"),
+            message.get("group_id"),
+            kwargs.get("group_id"),
+        )
+        message_id = _first_text(
+            message.get("message_id"),
+            message.get("id"),
+            kwargs.get("message_id"),
+        )
     if not stream_id:
         raise InvocationError("当前调用缺少 stream_id")
-    user_id = _first_text(
-        kwargs.get("user_id"),
-        user_info.get("user_id"),
-        message.get("user_id"),
-    )
-    group_id = _first_text(
-        kwargs.get("group_id"),
-        group_info.get("group_id"),
-        message.get("group_id"),
-    )
-    message_id = _first_text(
-        kwargs.get("message_id"),
-        message.get("message_id"),
-        message.get("id"),
-    )
     return InvocationContext(
         stream_id=stream_id,
         scope_key=make_scope_key(group_id=group_id or None, stream_id=stream_id),
@@ -69,6 +116,7 @@ def invocation_context(kwargs: Mapping[str, Any]) -> InvocationContext:
         group_id=group_id or None,
         message_id=message_id,
         message=message,
+        platform=platform,
     )
 
 

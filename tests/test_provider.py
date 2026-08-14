@@ -9,10 +9,14 @@ import httpx
 import pytest
 from PIL import Image
 
+import maitu_photo.provider as provider_module
 from maitu_photo.provider import (
     OpenAICompatibleProvider,
     ProviderConfigError,
     ProviderHTTPError,
+    ProviderImageDecodeError,
+    ProviderNetworkError,
+    ProviderResponseError,
     normalize_base_url,
 )
 
@@ -25,6 +29,26 @@ def _png(colour: str = "red") -> bytes:
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+class _NetworkStream:
+    def __init__(self, address: str, port: int = 443) -> None:
+        self.address = address
+        self.port = port
+
+    def get_extra_info(self, name: str):
+        return (self.address, self.port) if name == "server_addr" else None
+
+
+class _ChunkStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.yielded = 0
+
+    async def __aiter__(self):
+        for chunk in self.chunks:
+            self.yielded += 1
+            yield chunk
 
 
 @pytest.mark.parametrize(
@@ -44,6 +68,20 @@ def test_normalize_base_url(value: str, expected: str) -> None:
 def test_base_url_rejects_credentials_in_query() -> None:
     with pytest.raises(ProviderConfigError):
         normalize_base_url("https://example.test?api_key=secret")
+
+
+def test_base_url_rejects_userinfo_credentials() -> None:
+    with pytest.raises(ProviderConfigError):
+        normalize_base_url("https://alice:supersecret@example.test")
+
+
+def test_provider_errors_redact_url_userinfo() -> None:
+    error = ProviderNetworkError("request failed for https://alice:supersecret@example.test/api")
+
+    rendered = str(error)
+    assert "alice" not in rendered
+    assert "supersecret" not in rendered
+    assert "https://[REDACTED]@example.test/api" in rendered
 
 
 def test_images_generation_uses_expected_endpoint_and_parses_b64_json() -> None:
@@ -83,6 +121,34 @@ def test_images_generation_uses_expected_endpoint_and_parses_b64_json() -> None:
         "size": "1024x1024",
         "response_format": "b64_json",
     }
+
+
+def test_provider_response_stops_when_stream_exceeds_size_limit() -> None:
+    stream = _ChunkStream([b'{"data":[', b"x" * 256])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            stream=stream,
+            headers={"content-type": "application/json"},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                max_response_bytes=128,
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with pytest.raises(ProviderResponseError, match="size limit"):
+        _run(scenario())
+
+    assert stream.yielded == 2
 
 
 def test_images_edit_preserves_reference_order_in_multipart_body() -> None:
@@ -162,9 +228,17 @@ def test_chat_completions_sends_ordered_multimodal_content_and_parses_markdown()
     assert base64.b64decode(content[2]["image_url"]["url"].split(",", 1)[1]) == references[1]
 
 
-def test_remote_url_result_is_downloaded_without_forwarding_provider_secret() -> None:
+def test_remote_url_result_is_downloaded_without_forwarding_provider_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     image = _png()
     seen_authorization: list[str | None] = []
+
+    async def resolve_public_host(hostname: str, port: int) -> set[str]:
+        assert (hostname, port) == ("cdn.example.test", 443)
+        return {"93.184.216.34"}
+
+    monkeypatch.setattr(provider_module, "_resolve_host_addresses", resolve_public_host)
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST":
@@ -178,6 +252,7 @@ def test_remote_url_result_is_downloaded_without_forwarding_provider_secret() ->
             200,
             content=image,
             headers={"content-type": "image/png"},
+            extensions={"network_stream": _NetworkStream("93.184.216.34")},
             request=request,
         )
 
@@ -196,6 +271,253 @@ def test_remote_url_result_is_downloaded_without_forwarding_provider_secret() ->
     assert result.data == image
     assert result.source_url == "https://cdn.example.test/generated.png"
     assert seen_authorization == [""]
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        "http://127.0.0.1:8080/internal.png",
+        "http://10.0.0.8/internal.png",
+        "http://169.254.169.254/latest/meta-data",
+        "http://224.0.0.1/multicast.png",
+        "http://[ff02::1]/multicast.png",
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "https://alice:supersecret@8.8.8.8/internal.png",
+    ],
+)
+def test_remote_url_result_rejects_non_public_targets(image_url: str) -> None:
+    request_methods: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_methods.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(200, json={"data": [{"url": image_url}]}, request=request)
+        return httpx.Response(200, content=_png(), headers={"content-type": "image/png"}, request=request)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with pytest.raises(ProviderImageDecodeError):
+        _run(scenario())
+
+    assert request_methods == ["POST"]
+
+
+def test_remote_url_result_allows_same_configured_private_origin() -> None:
+    image = _png("green")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "http://127.0.0.1:8000/generated.png"}]},
+                request=request,
+            )
+        return httpx.Response(200, content=image, headers={"content-type": "image/png"}, request=request)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "http://127.0.0.1:8000",
+                "test-key-value",
+                generation_model="image-model",
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    result = _run(scenario())
+
+    assert result.data == image
+
+
+def test_remote_url_result_rejects_hostname_resolving_to_private_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request_methods: list[str] = []
+
+    async def resolve_private_host(hostname: str, port: int) -> set[str]:
+        assert (hostname, port) == ("cdn.example.test", 443)
+        return {"10.0.0.8"}
+
+    monkeypatch.setattr(provider_module, "_resolve_host_addresses", resolve_private_host)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_methods.append(request.method)
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://cdn.example.test/generated.png"}]},
+                request=request,
+            )
+        return httpx.Response(200, content=_png(), headers={"content-type": "image/png"}, request=request)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with pytest.raises(ProviderImageDecodeError):
+        _run(scenario())
+
+    assert request_methods == ["POST"]
+
+
+def test_remote_url_result_rejects_actual_peer_outside_validated_dns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def resolve_public_host(hostname: str, port: int) -> set[str]:
+        assert (hostname, port) == ("cdn.example.test", 443)
+        return {"93.184.216.34"}
+
+    monkeypatch.setattr(provider_module, "_resolve_host_addresses", resolve_public_host)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://cdn.example.test/generated.png"}]},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            content=_png(),
+            headers={"content-type": "image/png"},
+            extensions={"network_stream": _NetworkStream("10.0.0.8")},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with pytest.raises(ProviderImageDecodeError, match="unexpected address"):
+        _run(scenario())
+
+
+def test_remote_url_download_stops_when_stream_exceeds_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = _ChunkStream([b"\x89PNG\r\n\x1a\n", b"x" * 256])
+
+    async def resolve_public_host(hostname: str, port: int) -> set[str]:
+        assert (hostname, port) == ("cdn.example.test", 443)
+        return {"93.184.216.34"}
+
+    monkeypatch.setattr(provider_module, "_resolve_host_addresses", resolve_public_host)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://cdn.example.test/generated.png"}]},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            stream=stream,
+            headers={"content-type": "image/png"},
+            extensions={"network_stream": _NetworkStream("93.184.216.34")},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                max_response_bytes=128,
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with pytest.raises(ProviderResponseError, match="size limit"):
+        _run(scenario())
+
+    assert stream.yielded == 2
+
+
+def test_remote_url_rejects_non_image_bytes_despite_image_content_type() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://8.8.8.8/generated.png"}]},
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            content=b"not an image",
+            headers={"content-type": "image/png"},
+            extensions={"network_stream": _NetworkStream("8.8.8.8")},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with pytest.raises(ProviderImageDecodeError, match="non-image"):
+        _run(scenario())
+
+
+def test_remote_url_result_revalidates_redirect_targets() -> None:
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(str(request.url.host))
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://8.8.8.8/generated.png"}]},
+                request=request,
+            )
+        if request.url.host == "8.8.8.8":
+            return httpx.Response(
+                302,
+                headers={"location": "http://169.254.169.254/latest/meta-data"},
+                request=request,
+            )
+        return httpx.Response(200, content=_png(), headers={"content-type": "image/png"}, request=request)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with pytest.raises(ProviderImageDecodeError):
+        _run(scenario())
+
+    assert requested_hosts == ["api.example.test", "8.8.8.8"]
 
 
 def test_http_error_redacts_secrets_and_marks_retryability() -> None:

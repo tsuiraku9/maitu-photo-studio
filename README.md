@@ -1,4 +1,4 @@
-# 麦麦写真 · 让麦麦更真实的发送照片
+# 麦麦写真 · 让麦麦更真实地发送照片
 >
 > **⚠️ 免责声明**：本插件由 AI 辅助生成，代码可能存在未知缺陷或不当行为。使用前请自行审阅源码、评估风险，并对其在你的环境中产生的任何后果负责。
 >
@@ -15,7 +15,7 @@
 
 围绕这两项核心能力，插件补齐了照片发送所需的可靠性和连续性：
 
-- 🔁 **聊天连续性**：同一群聊或私聊流在相同场景、同一自然日和有效时长内，优先复用上次的服装与场景参考；管理员可以固定或重置。
+- 🔁 **聊天连续性**：同一 MaiBot 聊天流在相同场景、同一自然日和有效时长内，优先复用上次的服装与场景参考；不同平台、账号或路由作用域不会共享状态，管理员可以固定或重置。
 - ✨ **自动补库**：人物写真成功投递后，可从结果图异步补充本次缺失的服装或场景参考，不会阻塞用户收到照片。
 - ⏱️ **任务可追踪**：每次工具调用都会返回 `task_id`；队列、结果、实际使用的参考图和投递状态都会持久化，可在重载后继续查看或处理。
 - 🛡️ **队列与计费保护**：排队任务可在重载后恢复；已经发起付费图片请求却没有保存结果的运行中任务不会自动重试，以避免重复计费。
@@ -27,7 +27,6 @@
 | bot 本人出镜的自拍、他拍或生活照 | `generate_photo` | 默认使用全局人物参考板，并可复用服装和合格场景参考。 |
 | 不含 bot 本人的房间、景物或物品照片 | `generate_scene_photo` | 不传人物或服装参考，可按需使用合格场景参考。 |
 | 查询异步任务 | `get_image_task_status` | 返回任务状态；启用 `include_image` 时可附带已生成图片。 |
-| 由 Planner 管理图库 | `manage_reference_gallery` | 默认不注册。需显式开启、重载插件，并且调用者必须是插件管理员。 |
 
 所有生图工具均异步排队；参数、权限和配置校验通过后会立即返回 `{success, task_id, status}`，实际图片稍后由后台 worker 生成并投递。校验失败会同步返回错误且不会创建任务。同一需求不要重复提交；图片生成和参考图提取可能产生服务商费用。
 
@@ -103,6 +102,7 @@ flowchart TD
 
 ## 运行要求
 
+- MaiBot `>=1.1.4,<2.0.0`
 - Python `>=3.12`
 - MaiBot Plugin SDK `>=2.7.1,<3.0.0`
 - 支持 Images API 或 Chat Completions 的 OpenAI 兼容图片服务
@@ -120,6 +120,7 @@ MaiBot/plugins/maitu-photo-studio/
   plugin.py
   requirements.txt
   README.md
+  LICENSE
   maitu_photo/
 ```
 
@@ -132,7 +133,7 @@ python -m pip install -r requirements.txt
 ## 首次使用
 
 1. 在 MaiBot 加载或重载插件，然后打开 WebUI 的 `麦麦写真` 配置页。
-2. 配置 `plugin.admin_user_ids`。只有这里列出的用户可以执行 `/maitu` 管理命令和受限图库操作。
+2. 配置 `plugin.admin_user_ids`。建议按 `platform:user_id` 填写，例如 `qq:123456`；只有这里列出的用户可以执行 `/maitu` 管理命令和受限图库操作。旧版宿主未提供 `platform` 时才使用裸 ID。
 3. 配置 `openai.base_url`、`openai.api_key`、`openai.generation_model`、`openai.reference_model`、两种接口模式，以及 MaiBot 的 `model_tasks.tagging_task_name`（通常为 `vlm`）和 `model_tasks.selection_task_name`（通常为 `utils`）。
 4. 保存后重载插件，再由管理员执行：
 
@@ -175,7 +176,7 @@ python -m pip install -r requirements.txt
 - 默认严格要求人物参考板，保证身份稳定：在 `person_reference_enabled=true` 且 `require_person_reference=true` 时，缺少可用人物板或显式传 `use_person_reference=false` 都会拒绝。关闭 `require_person_reference` 后，缺图才会回退到 MaiBot 昵称和人格文字；关闭 `person_reference_enabled` 后默认走该回退，但显式传 `use_person_reference=true` 仍会尝试使用人物板。
 - 有服装参考板时由参考图控制服装；没有合适参考时使用 `clothing_style_prompt` 与文字提示回退。
 - 场景参考只在目标被判定为合格私密室内空间时使用。
-- 同一群聊按 `group_id` 隔离，私聊按聊天流隔离。默认同一自然日、同一场景指纹且 12 小时内优先复用服装和场景参考；管理员可固定或重置连续性。
+- 所有群聊和私聊都按 MaiBot canonical `stream_id` 隔离；不同平台、账号或路由作用域不会因目标 ID 相同而共享状态。默认同一自然日、同一场景指纹且 12 小时内优先复用服装和场景参考；管理员可固定或重置连续性。
 
 ### `generate_scene_photo`
 
@@ -185,9 +186,9 @@ python -m pip install -r requirements.txt
 
 不传 `task_id` 时查询当前聊天最近的任务；普通用户不能跨聊天查询。`include_image` 默认是 `false`；传 `true` 且 `output.include_image_in_status=true` 时，若结果文件仍在保留期内，响应会通过 SDK `content_items` 附带图片。配置关闭或结果文件已清理时仍返回状态，但不会附图。
 
-### `manage_reference_gallery`
+### 图库管理权限
 
-默认关闭，关闭时 Planner 看不到该工具。开启 `references.planner_gallery_management_enabled` 后必须重载插件，且调用上下文仍必须属于 `plugin.admin_user_ids` 中的管理员。日常图库维护建议优先使用下方管理员命令。
+图库写操作不会作为 Planner 工具暴露，只能由 `plugin.admin_user_ids` 中的管理员通过 `/maitu` 命令执行。配置中的旧版 `references.planner_gallery_management_enabled` 字段仅为兼容已有配置保留，当前版本不会启用它。
 
 ## 管理员命令
 
@@ -267,5 +268,5 @@ python -m pip install -r requirements.txt
 | `generate_photo` 提示没有人物参考图 | 默认严格组合要求 active 人物参考板；由管理员提取、导入或生成。关闭 `references.require_person_reference`，或将 `references.person_reference_enabled=false` 且不显式请求人物参考，才会使用人格文字回退；工具显式请求人物参考时仍按开关校验。 |
 | 场景参考没有生效 | 检查目标是否是合格私密室内空间、场景参考是否已启用且标签通过校验。 |
 | 任务已排队但没有图片 | 用 `get_image_task_status(task_id=...)` 或 `/maitu 任务 查看 <任务ID>` 查询；管理员可按状态决定重试或取消。 |
-| Planner 无法管理图库 | 检查图库管理开关、管理员 ID，并在修改开关后重载插件。 |
+| Planner 无法管理图库 | 这是预期行为；请配置管理员 ID 后使用 `/maitu` 命令管理图库。 |
 | 图片发送后没有 Planner 后续动作 | 检查 `output.notify_planner`、Maisaka 能力和插件日志；图片不会因通知失败而重复发送。 |

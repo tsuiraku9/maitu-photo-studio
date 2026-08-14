@@ -10,20 +10,26 @@ an image request).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
+import ipaddress
 import json
 import re
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO, Mapping, Sequence
-from urllib.parse import unquote_to_bytes, urlsplit
+from urllib.parse import unquote_to_bytes, urljoin, urlsplit
 
 import httpx
 
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_MAX_RESPONSE_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_IMAGE_REDIRECTS = 5
 SUPPORTED_MODES = frozenset({"images_api", "chat_completions"})
+_IMAGE_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+_BLOCKED_IMAGE_HOSTNAMES = frozenset({"localhost", "localhost.localdomain", "metadata.google.internal"})
 
 
 class ProviderError(RuntimeError):
@@ -89,6 +95,8 @@ def _redact(value: object) -> str:
         r"\1[REDACTED]",
         text,
     )
+    # URL userinfo can contain credentials that do not resemble API keys.
+    text = re.sub(r"(?i)(https?://)[^\s/?#]*@", r"\1[REDACTED]@", text)
     # Do not expose query-string credentials in a provider URL.
     text = re.sub(r"(?i)([?&](?:api[_-]?key|token|key)=)[^&\s]+", r"\1[REDACTED]", text)
     return text[:4000]
@@ -103,6 +111,8 @@ def normalize_base_url(base_url: str) -> str:
     parsed = urlsplit(raw)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ProviderConfigError("base_url must be an absolute http(s) URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ProviderConfigError("base_url must not contain userinfo credentials")
     if parsed.query or parsed.fragment:
         raise ProviderConfigError("base_url must not contain query or fragment credentials")
     path = parsed.path.rstrip("/")
@@ -111,6 +121,107 @@ def normalize_base_url(base_url: str) -> str:
     elif not path.lower().endswith("/v1"):
         path = f"{path}/v1"
     return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+async def _resolve_host_addresses(hostname: str, port: int) -> set[str]:
+    loop = asyncio.get_running_loop()
+    records = await loop.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    return {str(record[4][0]).split("%", 1)[0] for record in records if record[4]}
+
+
+def _url_origin(url: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return None
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except (TypeError, ValueError):
+        return None
+    return parsed.scheme, parsed.hostname.rstrip(".").casefold(), port
+
+
+async def _validate_remote_image_url(
+    url: str,
+    *,
+    allowed_origin: tuple[str, str, int] | None = None,
+) -> set[str] | None:
+    """Reject image URLs that could reach credentials or non-public networks."""
+
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except (TypeError, ValueError) as exc:
+        raise ProviderImageDecodeError("provider returned an invalid image URL") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.hostname:
+        raise ProviderImageDecodeError("provider returned an invalid image URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ProviderImageDecodeError("provider returned a disallowed image URL")
+
+    hostname = parsed.hostname.rstrip(".").casefold()
+    same_configured_origin = allowed_origin == (parsed.scheme, hostname, port)
+    if (
+        not hostname
+        or "%" in hostname
+        or hostname == "metadata.google.internal"
+        or (
+            not same_configured_origin
+            and (
+                hostname in _BLOCKED_IMAGE_HOSTNAMES
+                or hostname.endswith(".localhost")
+                or hostname.endswith(".localhost.localdomain")
+            )
+        )
+    ):
+        raise ProviderImageDecodeError("provider returned a disallowed image URL")
+
+    if same_configured_origin:
+        # The provider base URL is explicitly configured by the administrator;
+        # local origins are therefore allowed without a public-DNS requirement.
+        return None
+
+    try:
+        literal_address = ipaddress.ip_address(hostname)
+    except ValueError:
+        try:
+            resolved_addresses = await _resolve_host_addresses(hostname, port)
+        except (OSError, UnicodeError) as exc:
+            raise ProviderNetworkError("image URL host could not be resolved") from exc
+        if not resolved_addresses:
+            raise ProviderNetworkError("image URL host could not be resolved") from None
+        try:
+            addresses = [ipaddress.ip_address(address) for address in resolved_addresses]
+        except ValueError as exc:
+            raise ProviderNetworkError("image URL host resolved to an invalid address") from exc
+    else:
+        addresses = [literal_address]
+
+    if any(not address.is_global or address.is_multicast for address in addresses):
+        raise ProviderImageDecodeError("provider returned a disallowed image URL")
+    # Return the exact addresses checked above so the caller can compare them
+    # with the address of the socket HTTPX actually opens.  A second DNS lookup
+    # without this binding would leave a DNS-rebinding window.
+    return {str(address) for address in addresses}
+
+
+def _connected_peer_address(response: httpx.Response) -> str | None:
+    """Return the canonical IP address of HTTPX's actual network peer."""
+
+    network_stream = response.extensions.get("network_stream")
+    getter = getattr(network_stream, "get_extra_info", None)
+    if not callable(getter):
+        return None
+    try:
+        server_address = getter("server_addr")
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+    if isinstance(server_address, (tuple, list)) and server_address:
+        server_address = server_address[0]
+    if not isinstance(server_address, str):
+        return None
+    try:
+        return str(ipaddress.ip_address(server_address.split("%", 1)[0]))
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -308,6 +419,7 @@ class OpenAICompatibleProvider:
             )
         self.config = config
         self.base_url = config.base_url
+        self._base_origin = _url_origin(self.base_url)
         self.api_key = config.api_key
         self.mode = config.mode
         self.generation_model = config.generation_model
@@ -376,12 +488,23 @@ class OpenAICompatibleProvider:
 
     async def _post_json(self, endpoint: str, payload: Mapping[str, Any]) -> httpx.Response:
         try:
-            response = await self.client.post(
+            async with self.client.stream(
+                "POST",
                 endpoint,
                 headers=self._headers(json_request=True),
                 json=dict(payload),
                 timeout=self.timeout,
-            )
+            ) as streamed_response:
+                body = await self._read_limited_body(
+                    streamed_response,
+                    "provider response exceeds configured size limit",
+                )
+                response = httpx.Response(
+                    streamed_response.status_code,
+                    headers=streamed_response.headers,
+                    content=body,
+                    request=streamed_response.request,
+                )
         except httpx.TimeoutException as exc:
             raise ProviderNetworkError("image provider request timed out") from exc
         except httpx.RequestError as exc:
@@ -396,18 +519,47 @@ class OpenAICompatibleProvider:
         files: Sequence[tuple[str, tuple[str, bytes, str]]],
     ) -> httpx.Response:
         try:
-            response = await self.client.post(
+            async with self.client.stream(
+                "POST",
                 endpoint,
                 headers=self._headers(json_request=False),
                 data=dict(data),
                 files=list(files),
                 timeout=self.timeout,
-            )
+            ) as streamed_response:
+                body = await self._read_limited_body(
+                    streamed_response,
+                    "provider response exceeds configured size limit",
+                )
+                response = httpx.Response(
+                    streamed_response.status_code,
+                    headers=streamed_response.headers,
+                    content=body,
+                    request=streamed_response.request,
+                )
         except httpx.TimeoutException as exc:
             raise ProviderNetworkError("image provider request timed out") from exc
         except httpx.RequestError as exc:
             raise ProviderNetworkError(f"image provider request failed: {self._safe_text(exc)}") from exc
         return self._check_response(response)
+
+    async def _read_limited_body(self, response: httpx.Response, limit_error: str) -> bytes:
+        content_length = response.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > self.max_response_bytes:
+                    raise ProviderResponseError(limit_error)
+            except ValueError:
+                pass
+
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in response.aiter_bytes():
+            total += len(chunk)
+            if total > self.max_response_bytes:
+                raise ProviderResponseError(limit_error)
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     def _check_response(self, response: httpx.Response) -> httpx.Response:
         content_length = response.headers.get("content-length")
@@ -434,36 +586,80 @@ class OpenAICompatibleProvider:
         return response
 
     async def _download_image(self, url: str) -> GeneratedImage:
-        parsed = urlsplit(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ProviderImageDecodeError("provider returned an invalid image URL")
-        try:
-            # Do not forward the provider's Authorization header to a third
-            # party image host.  An explicit empty value overrides client-level
-            # defaults while preserving MockTransport compatibility in tests.
-            response = await self.client.get(
-                url,
-                headers={"Accept": "image/*", "Authorization": ""},
-                timeout=self.timeout,
-                follow_redirects=True,
+        current_url = url
+        for redirect_count in range(DEFAULT_MAX_IMAGE_REDIRECTS + 1):
+            expected_addresses = await _validate_remote_image_url(
+                current_url,
+                allowed_origin=self._base_origin,
             )
-        except httpx.TimeoutException as exc:
-            raise ProviderNetworkError("image download timed out") from exc
-        except httpx.RequestError as exc:
-            raise ProviderNetworkError("image download failed") from exc
-        if response.status_code >= 400:
-            raise ProviderHTTPError(
-                f"image download returned HTTP {response.status_code}",
-                status_code=response.status_code,
-                retryable=response.status_code >= 500,
-            )
-        data = response.content
-        if len(data) > self.max_response_bytes:
-            raise ProviderResponseError("downloaded image exceeds configured size limit")
-        if not data:
-            raise ProviderImageDecodeError("provider returned an empty image")
-        media = response.headers.get("content-type", "").split(";", 1)[0].strip()
-        return GeneratedImage(data=data, media_type=media or _media_type_for_bytes(data), source_url=url)
+            try:
+                # Do not forward the provider's Authorization header to a third
+                # party image host.  An explicit empty value overrides client-level
+                # defaults while preserving MockTransport compatibility in tests.
+                async with self.client.stream(
+                    "GET",
+                    current_url,
+                    headers={"Accept": "image/*", "Authorization": ""},
+                    timeout=self.timeout,
+                    follow_redirects=False,
+                ) as response:
+                    self._validate_download_peer(response, expected_addresses)
+
+                    if response.status_code in _IMAGE_REDIRECT_STATUSES:
+                        location = response.headers.get("location", "").strip()
+                        if not location:
+                            raise ProviderResponseError("image download redirect did not include a location")
+                        if redirect_count >= DEFAULT_MAX_IMAGE_REDIRECTS:
+                            raise ProviderResponseError("image download exceeded the redirect limit")
+                        current_url = urljoin(str(response.url), location)
+                        continue
+
+                    if response.status_code >= 400:
+                        raise ProviderHTTPError(
+                            f"image download returned HTTP {response.status_code}",
+                            status_code=response.status_code,
+                            retryable=response.status_code >= 500,
+                        )
+
+                    data = await self._read_limited_body(
+                        response,
+                        "downloaded image exceeds configured size limit",
+                    )
+                    if not data:
+                        raise ProviderImageDecodeError("provider returned an empty image")
+                    detected_media = _media_type_for_bytes(data, fallback="")
+                    if not detected_media:
+                        raise ProviderImageDecodeError("provider returned non-image download content")
+                    return GeneratedImage(
+                        data=data,
+                        media_type=detected_media,
+                        source_url=url,
+                    )
+            except httpx.TimeoutException as exc:
+                raise ProviderNetworkError("image download timed out") from exc
+            except httpx.RequestError as exc:
+                raise ProviderNetworkError("image download failed") from exc
+        raise ProviderNetworkError("image download failed")  # pragma: no cover
+
+    def _validate_download_peer(
+        self,
+        response: httpx.Response,
+        expected_addresses: set[str] | None,
+    ) -> None:
+        """Bind DNS validation to the socket used for an external download."""
+
+        if expected_addresses is None:
+            return
+        peer_address = _connected_peer_address(response)
+        if peer_address is None:
+            # MockTransport has no socket.  It is an explicit in-process test
+            # transport; real/custom network transports must expose the peer or
+            # the cross-origin download fails closed.
+            if isinstance(getattr(self.client, "_transport", None), httpx.MockTransport):
+                return
+            raise ProviderNetworkError("image download peer address could not be verified", retryable=False)
+        if peer_address not in expected_addresses:
+            raise ProviderImageDecodeError("provider image URL connected to an unexpected address")
 
     async def _parse_response(self, response: httpx.Response) -> list[GeneratedImage]:
         content_type = response.headers.get("content-type", "").lower()
