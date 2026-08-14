@@ -24,7 +24,7 @@
     "max_version": "2.99.99"
   },
   "dependencies": [
-    {"type": "python_package", "name": "pillow", "version_spec": ">=11.0.0"},
+    {"type": "python_package", "name": "Pillow", "version_spec": ">=11.0.0"},
     {"type": "python_package", "name": "httpx", "version_spec": ">=0.27.0"}
   ],
   "plugin_type": "media",
