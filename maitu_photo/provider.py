@@ -486,37 +486,14 @@ class OpenAICompatibleProvider:
             raise ProviderConfigError("image model is not configured")
         return selected
 
-    @staticmethod
-    def _uses_native_gpt_image_output(model: str) -> bool:
-        """Return whether the model uses GPT Image's native base64 output.
-
-        GPT Image models return base64 image data by default and do not use the
-        legacy DALL-E ``response_format`` request field.  Omitting that field
-        keeps strict OpenAI-compatible gateways from rejecting otherwise valid
-        image requests.
-        """
-
-        return model.strip().casefold().startswith("gpt-image-")
-
     async def _post_json(self, endpoint: str, payload: Mapping[str, Any]) -> httpx.Response:
         try:
-            async with self.client.stream(
-                "POST",
+            response = await self.client.post(
                 endpoint,
                 headers=self._headers(json_request=True),
                 json=dict(payload),
                 timeout=self.timeout,
-            ) as streamed_response:
-                body = await self._read_limited_body(
-                    streamed_response,
-                    "provider response exceeds configured size limit",
-                )
-                response = httpx.Response(
-                    streamed_response.status_code,
-                    headers=streamed_response.headers,
-                    content=body,
-                    request=streamed_response.request,
-                )
+            )
         except httpx.TimeoutException as exc:
             raise ProviderNetworkError("image provider request timed out") from exc
         except httpx.RequestError as exc:
@@ -531,24 +508,13 @@ class OpenAICompatibleProvider:
         files: Sequence[tuple[str, tuple[str, bytes, str]]],
     ) -> httpx.Response:
         try:
-            async with self.client.stream(
-                "POST",
+            response = await self.client.post(
                 endpoint,
                 headers=self._headers(json_request=False),
                 data=dict(data),
                 files=list(files),
                 timeout=self.timeout,
-            ) as streamed_response:
-                body = await self._read_limited_body(
-                    streamed_response,
-                    "provider response exceeds configured size limit",
-                )
-                response = httpx.Response(
-                    streamed_response.status_code,
-                    headers=streamed_response.headers,
-                    content=body,
-                    request=streamed_response.request,
-                )
+            )
         except httpx.TimeoutException as exc:
             raise ProviderNetworkError("image provider request timed out") from exc
         except httpx.RequestError as exc:
@@ -935,7 +901,7 @@ class OpenAICompatibleProvider:
             # gateways; preserving it as a separate field lets those gateways
             # apply their own semantics instead of silently dropping it.
             payload["negative_prompt"] = negative_prompt
-        if response_format and not self._uses_native_gpt_image_output(model):
+        if response_format:
             payload["response_format"] = response_format
         if extra:
             payload.update(dict(extra))
@@ -961,15 +927,15 @@ class OpenAICompatibleProvider:
             extension = media.split("/", 1)[-1] if "/" in media else "jpeg"
             if extension == "jpg":
                 extension = "jpeg"
-            # The Image API exposes the input as an array field.  The
-            # bracketed name is required by strict OpenAI-compatible gateways.
-            files.append(("image[]", (f"reference-{index}.{extension}", data, media)))
+            # Keep the singular field name for gateways that accept repeated
+            # multipart image parts under the OpenAI-compatible ``image`` key.
+            files.append(("image", (f"reference-{index}.{extension}", data, media)))
         fields: dict[str, Any] = {"model": model, "prompt": prompt, "n": str(n)}
         if size:
             fields["size"] = size
         if negative_prompt:
             fields["negative_prompt"] = negative_prompt
-        if response_format and not self._uses_native_gpt_image_output(model):
+        if response_format:
             fields["response_format"] = response_format
         if extra:
             fields.update(dict(extra))

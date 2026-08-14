@@ -51,6 +51,11 @@ class _ChunkStream(httpx.AsyncByteStream):
             yield chunk
 
 
+class _NoStreamClient(httpx.AsyncClient):
+    async def stream(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("image provider requests must use AsyncClient.post")
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -123,7 +128,7 @@ def test_images_generation_uses_expected_endpoint_and_parses_b64_json() -> None:
     }
 
 
-def test_gpt_image_generation_omits_legacy_response_format() -> None:
+def test_gpt_image_generation_requests_base64_output() -> None:
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -148,7 +153,12 @@ def test_gpt_image_generation_omits_legacy_response_format() -> None:
 
     payload = seen["json"]
     assert isinstance(payload, dict)
-    assert payload == {"model": "gpt-image-2", "prompt": "a portrait", "n": 1}
+    assert payload == {
+        "model": "gpt-image-2",
+        "prompt": "a portrait",
+        "n": 1,
+        "response_format": "b64_json",
+    }
 
 
 def test_provider_response_stops_when_stream_exceeds_size_limit() -> None:
@@ -212,10 +222,32 @@ def test_images_edit_preserves_reference_order_in_multipart_body() -> None:
     assert seen["url"] == "https://api.example.test/v1/images/edits"
     assert str(seen["content_type"]).startswith("multipart/form-data; boundary=")
     assert body.find(first) < body.find(second)
-    assert body.count(b'name="image[]"') == 2
-    assert b'name="response_format"' not in body
+    assert body.count(b'name="image"') == 2
+    assert b'name="response_format"' in body
     assert b"reference-0.jpeg" in body
     assert b"reference-1.jpeg" in body
+
+
+def test_images_edit_uses_eager_post_for_compatible_gateways() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(_png("green")).decode()}]},
+            request=request,
+        )
+
+    async def scenario():
+        async with _NoStreamClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="gpt-image-2",
+                client=client,
+            )
+            return await provider.edit_image("keep identity", [b"REFERENCE"])
+
+    result = _run(scenario())
+    assert result.media_type == "image/png"
 
 
 def test_chat_completions_sends_ordered_multimodal_content_and_parses_markdown() -> None:
