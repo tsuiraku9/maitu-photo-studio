@@ -13,6 +13,18 @@
 
 所有生图工具均异步排队；参数、权限和配置校验通过后会立即返回 `{success, task_id, status}`，实际图片稍后由后台 worker 生成并投递。校验失败会同步返回错误且不会创建任务。同一需求不要重复提交；图片生成和参考图提取可能产生服务商费用。
 
+## 工作流程
+
+```text
+聊天中的照片需求 → Planner 选择工具 → 插件校验并创建任务 → 图片服务生成 → 成功后自动投递
+                                      ↘ 返回 task_id，可随时查询进度 ↗
+```
+
+1. 画面中有 bot 本人时，Planner 调用 `generate_photo`；仅需环境、景物或物品照片时，调用 `generate_scene_photo`。
+2. 插件校验权限、配置和可用参考图，通过后把任务放入后台队列，并立即返回 `task_id`。
+3. worker 调用配置的图片服务生成照片；成功后投递到原聊天，并按设置唤醒 Planner。
+4. 需要等待结果或排查状态时，使用 `get_image_task_status`，也可以让管理员用 `/maitu 任务 查看 <任务ID>` 查询。
+
 ## 运行要求
 
 - Python `>=3.12`
@@ -74,13 +86,13 @@ python -m pip install -e ".[dev]"
    ```
 
    场景参考只接受卧室、浴室、客厅等室内私密小空间；咖啡店、商场、街道、办公室等不会参与生图。
-7. 在 MaiBot 本机的 `bot_config.toml` 中，将下面这句话追加到现有 `behavior_style` 文本（沿用当前配置的 TOML 引号或多行写法，不要覆盖原有行为设定）：
+7. **可选建议，并不是安装或使用插件的必需配置：** 如需让 Planner 在合适时主动调用照片工具，可在 MaiBot 本机的 `bot_config.toml` 中，将下面这句话追加到现有 `behavior_style` 文本（沿用当前配置的 TOML 引号或多行写法，不要覆盖原有行为设定）：
 
    ```text
-   当用户明确需要照片时，你可以调用generate_scene_photo和generate_photo工具生成照片。
+   你可以调用generate_scene_photo和generate_photo工具生成照片
    ```
 
-   根据画面是否包含 bot 本人选择工具，并避免对同一需求重复调用。`bot_config.toml` 是本地运行配置，不要提交到 Git；本仓库不跟踪这份文件。
+   这只是提升自动调用效果的本地行为建议；不添加也不影响插件安装、配置或手动调用。根据画面是否包含 bot 本人选择工具，并避免对同一需求重复调用。`bot_config.toml` 是本地运行配置，不要提交到 Git；本仓库不跟踪这份文件。
 8. 让 Planner 调用对应工具，并使用返回的 `task_id` 查询进度。图片成功投递后，默认会追加上下文并唤醒 Planner；可通过 `output.notify_planner` 关闭。
 
 ## 工具选择
