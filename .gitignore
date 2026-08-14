@@ -9,6 +9,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .agents/
+/AGENTS_HANDOFF.md
 
 # Local credentials, archives, and databases
 生图测试用api.md
