@@ -228,7 +228,7 @@ class ReferenceSection(PluginConfigBase):
         description="缺少参考图时是否自动从结果提取",
         json_schema_extra=_ui(
             "自动补充缺失参考图",
-            "照片使用文字回退后，从成功结果异步提取缺少的服装参考板；场景会先根据生成图实际画面复核合格性，再决定是否提取。",
+            "照片使用文字回退后，从成功结果异步提取缺少的服装或场景参考板；场景先通过文字资格判断，随后立即创建补库任务。",
         ),
     )
     auto_enable_generated_references: bool = Field(
@@ -590,13 +590,12 @@ class PromptSection(PluginConfigBase):
             "判断目标场景是否属于适合保存参考图的室内私密小空间。卧室、浴室、客厅合格；"
             "咖啡店、商场、街道、办公室等公共或开放场所不合格。只输出 JSON："
             '{{"eligible":false,"scene_signature":"","reason":""}}\n'
-            "场景描述：{scene_hint}\n完整需求：{description}\n"
-            "如附有图片，必须依据图片中的实际场景作出资格判断，而不是仅依据文字描述。"
+            "场景描述：{scene_hint}\n完整需求：{description}"
         ),
-        description="目标场景资格与场景指纹判断提示词",
+        description="目标场景文字资格与场景指纹判断提示词",
         json_schema_extra=_prompt_ui(
             "场景资格判断提示词",
-            "约束哪些地点可使用或入库场景参考图；自动补库会附带生成结果图并按实际画面判断。",
+            "根据场景文字描述约束哪些地点可使用或入库场景参考图；资格通过后自动创建补库任务。",
             "{scene_hint} 规划器传入的场景/地点提示；{description} 规划器填写的完整拍摄需求。",
         ),
     )

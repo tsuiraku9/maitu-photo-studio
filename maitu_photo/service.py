@@ -915,10 +915,8 @@ class PhotoStudioService:
         # the user's paid photo, nor extracts an undelivered image into the gallery.
         await self._schedule_backfill_tasks(
             task,
-            payload,
             selection,
             result_path,
-            generated.media_type,
             use_outfit,
             use_scene,
         )
@@ -1281,10 +1279,8 @@ class PhotoStudioService:
     async def _schedule_backfill_tasks(
         self,
         parent: ImageTask,
-        payload: Mapping[str, Any],
         selection: SelectionResult,
         result_path: Path,
-        result_media_type: str,
         use_outfit: bool,
         use_scene: bool,
     ) -> None:
@@ -1311,14 +1307,7 @@ class PhotoStudioService:
         if use_outfit and selection.outfit is None:
             jobs.append((ReferenceCategory.OUTFIT, f"自动补库-服装-{parent.id[:8]}"))
         if use_scene and selection.scene is None and selection.scene_eligible:
-            if await self._generated_scene_is_eligible(
-                parent.id,
-                payload,
-                result,
-                result_media_type,
-                expected_scene_signature=selection.scene_signature,
-            ):
-                jobs.append((ReferenceCategory.SCENE, f"自动补库-场景-{parent.id[:8]}"))
+            jobs.append((ReferenceCategory.SCENE, f"自动补库-场景-{parent.id[:8]}"))
         for category, name in jobs:
             try:
                 self.submit_reference_job(
@@ -1337,45 +1326,6 @@ class PhotoStudioService:
                     category.value,
                     _safe_error(exc),
                 )
-
-    async def _generated_scene_is_eligible(
-        self,
-        task_id: str,
-        payload: Mapping[str, Any],
-        image: bytes,
-        media_type: str,
-        *,
-        expected_scene_signature: str,
-    ) -> bool:
-        """Verify a generated image before creating an automatic scene extraction job."""
-
-        try:
-            result = await self.llm.generate_json(
-                self.prompts.render(
-                    "scene_eligibility",
-                    description=str(payload.get("description") or ""),
-                    scene_hint=str(payload.get("scene_hint") or ""),
-                ),
-                task_name=self.config.model_tasks.selection_task_name,
-                image_bytes=image,
-                mime_type=media_type or "image/jpeg",
-                temperature=self.config.model_tasks.temperature,
-                max_tokens=self.config.model_tasks.max_tokens,
-            )
-            actual_signature = str(result.get("scene_signature") or "").strip()
-            return (
-                isinstance(result.get("eligible"), bool)
-                and result["eligible"]
-                and bool(actual_signature)
-                and normalize_scene_signature(actual_signature) == normalize_scene_signature(expected_scene_signature)
-            )
-        except Exception as exc:  # noqa: BLE001 - unverified images must never trigger extraction
-            self.ctx.logger.warning(
-                "Task %s skipped automatic scene backfill because image eligibility could not be verified: %s",
-                task_id,
-                _safe_error(exc),
-            )
-            return False
 
     def _save_result(self, task_id: str, generated: GeneratedImage) -> Path:
         suffix = {

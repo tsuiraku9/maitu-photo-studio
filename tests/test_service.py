@@ -419,15 +419,14 @@ def test_photo_allows_text_person_when_person_reference_disabled(tmp_path: Path)
     asyncio.run(scenario())
 
 
-def test_auto_backfill_skips_scene_extraction_when_generated_scene_is_ineligible(tmp_path: Path) -> None:
+def test_auto_backfill_skips_scene_extraction_when_scene_text_is_ineligible(tmp_path: Path) -> None:
     async def scenario() -> None:
         config = _config()
         config.references.person_reference_enabled = False
         ctx = _Context(
             [
-                {"eligible": True, "scene_signature": "bedroom-window", "reason": "private"},
-                {"scene_signature": "bedroom-window", "changed": False},
-                {"eligible": False, "scene_signature": "cafe", "reason": "generated image is public"},
+                {"eligible": False, "scene_signature": "cafe", "reason": "public text scene"},
+                {"scene_signature": "cafe", "changed": False},
                 {
                     "type": "dress",
                     "wearing_scenes": ["casual"],
@@ -453,15 +452,34 @@ def test_auto_backfill_skips_scene_extraction_when_generated_scene_is_ineligible
         assert children[0].kind == "reference_extract"
         assert children[0].result_metadata["asset_category"] == ReferenceCategory.OUTFIT.value
         assert all(asset.category != ReferenceCategory.SCENE for asset in service.gallery.list_assets())
-        eligibility_call = ctx.llm.calls[2]
-        assert isinstance(eligibility_call, list)
-        assert eligibility_call[0]["content"][1]["type"] == "image_url"
+        text_eligibility_calls = [
+            call
+            for call in ctx.llm.calls
+            if isinstance(call, str) and "判断目标场景是否属于" in call
+        ]
+        assert len(text_eligibility_calls) == 1
+        assert not any(
+            isinstance(call, list)
+            and call
+            and isinstance(call[0], dict)
+            and any(
+                isinstance(item, dict)
+                and item.get("type") == "text"
+                and "判断目标场景是否属于" in str(item.get("text") or "")
+                for item in call[0].get("content", [])
+            )
+            and any(
+                isinstance(item, dict) and item.get("type") == "image_url"
+                for item in call[0].get("content", [])
+            )
+            for call in ctx.llm.calls
+        )
         await service.close()
 
     asyncio.run(scenario())
 
 
-def test_auto_backfill_extracts_scene_only_after_generated_image_is_eligible(tmp_path: Path) -> None:
+def test_auto_backfill_extracts_scene_when_scene_text_is_eligible(tmp_path: Path) -> None:
     async def scenario() -> None:
         config = _config()
         config.references.person_reference_enabled = False
@@ -469,7 +487,6 @@ def test_auto_backfill_extracts_scene_only_after_generated_image_is_eligible(tmp
             [
                 {"eligible": True, "scene_signature": "bedroom-window", "reason": "private"},
                 {"scene_signature": "bedroom-window", "changed": False},
-                {"eligible": True, "scene_signature": "bedroom-window", "reason": "generated image is private"},
                 {
                     "type": "dress",
                     "wearing_scenes": ["casual"],
@@ -507,6 +524,28 @@ def test_auto_backfill_extracts_scene_only_after_generated_image_is_eligible(tmp
             "confidence": 0.9,
         }
         assert "光线" in service._scene_prompt(scenes[0], "")
+        text_eligibility_calls = [
+            call
+            for call in ctx.llm.calls
+            if isinstance(call, str) and "判断目标场景是否属于" in call
+        ]
+        assert len(text_eligibility_calls) == 1
+        assert not any(
+            isinstance(call, list)
+            and call
+            and isinstance(call[0], dict)
+            and any(
+                isinstance(item, dict)
+                and item.get("type") == "text"
+                and "判断目标场景是否属于" in str(item.get("text") or "")
+                for item in call[0].get("content", [])
+            )
+            and any(
+                isinstance(item, dict) and item.get("type") == "image_url"
+                for item in call[0].get("content", [])
+            )
+            for call in ctx.llm.calls
+        )
         await service.close()
 
     asyncio.run(scenario())
