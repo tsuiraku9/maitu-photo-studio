@@ -11,7 +11,7 @@ import pytest
 from PIL import Image
 
 from maitu_photo.config import PhotoPluginConfig
-from maitu_photo.models import ImageTask, ReferenceCategory, TaskStatus
+from maitu_photo.models import AssetStatus, ImageTask, ReferenceCategory, TaskStatus
 from maitu_photo.provider import GeneratedImage
 from maitu_photo.runtime import InvocationContext
 from maitu_photo.service import PhotoStudioError, PhotoStudioService, TaskAccessError
@@ -517,12 +517,20 @@ def test_auto_backfill_extracts_scene_when_scene_text_is_eligible(tmp_path: Path
         assert {child.result_metadata["asset_category"] for child in children} == {"outfit", "scene"}
         scenes = service.gallery.list_assets(category=ReferenceCategory.SCENE)
         assert len(scenes) == 1
+        assert scenes[0].status == AssetStatus.ACTIVE
         assert scenes[0].tags == {
             "room_type": "bedroom",
             "privacy_eligible": True,
             "scene_signature": "bedroom-window",
             "confidence": 0.9,
         }
+        scene_child = next(
+            child for child in children if child.result_metadata["asset_category"] == ReferenceCategory.SCENE.value
+        )
+        assert scene_child.result_metadata["asset_status"] == AssetStatus.ACTIVE.value
+        scene_tag_call = ctx.llm.calls[-1]
+        assert isinstance(scene_tag_call, list)
+        assert '"privacy_eligible":false' in scene_tag_call[0]["content"][0]["text"]
         assert "光线" in service._scene_prompt(scenes[0], "")
         text_eligibility_calls = [
             call

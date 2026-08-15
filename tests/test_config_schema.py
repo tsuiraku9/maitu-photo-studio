@@ -39,6 +39,22 @@ def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     assert prompt_fields["generate_scene_photo_brief"]["ui_type"] == "textarea"
 
 
+def test_default_scene_tag_prompt_requests_privacy_eligibility() -> None:
+    assert '"privacy_eligible":false' in PhotoPluginConfig().prompts.tag_scene
+
+
+def test_legacy_broken_scene_tag_prompt_is_migrated() -> None:
+    legacy_prompt = (
+        "请分析场景参考板并只输出符合 Schema 的 JSON："
+        '{{"room_type":"","scene_signature":"","confidence":0}}。'
+        "时间和光线由每次生图任务自行判断；confidence 必须是 0 到 1 之间的小数。"
+    )
+
+    config = PhotoPluginConfig.model_validate({"prompts": {"tag_scene": legacy_prompt}})
+
+    assert '"privacy_eligible":false' in config.prompts.tag_scene
+
+
 def test_every_config_section_has_chinese_title_and_description() -> None:
     schema = generate_plugin_config_schema(PhotoPluginConfig)
 

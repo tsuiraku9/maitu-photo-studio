@@ -616,7 +616,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 asset = self.service.gallery.require(asset_id)
                 validation = validate_reference_tags(asset.category, asset.effective_tags)
                 if not validation.selectable:
-                    raise ValueError("标签未通过 Schema/场景资格校验，不能启用")
+                    raise ValueError("标签未通过 Schema/场景资格校验，不能审核通过；请先重标或修正标签")
                 asset = self.service.gallery.enable(asset.id)
             else:
                 asset = self.service.gallery.disable(asset_id)
@@ -776,7 +776,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         if command.action == "enable":
             validation = validate_reference_tags(asset.category, asset.effective_tags)
             if not validation.selectable:
-                raise ValueError("标签未通过 Schema/场景资格校验，不能启用")
+                raise ValueError("标签未通过 Schema/场景资格校验，不能审核通过；请先重标或修正标签")
             return f"已启用：{self._format_asset(self.service.gallery.enable(asset.id))}"
         if command.action == "disable":
             return f"已停用：{self._format_asset(self.service.gallery.disable(asset.id))}"

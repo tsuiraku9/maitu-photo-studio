@@ -5,7 +5,7 @@ import base64
 
 import pytest
 
-from maitu_photo.commands import CommandParseError, parse_admin_command, parse_tags
+from maitu_photo.commands import CommandParseError, help_text, parse_admin_command, parse_tags
 from maitu_photo.reference_service import validate_reference_tags
 from maitu_photo.runtime import (
     ImageInputError,
@@ -194,6 +194,12 @@ def test_command_parser_supports_quotes_options_and_json_tags() -> None:
     assert generated.domain == "person"
     assert generated.action == "generate"
     assert generated.options["appearance_hint"] == "短发圆脸"
+
+    approval = parse_admin_command("/maitu 参考 审核通过 abc")
+    assert approval.domain == "ref"
+    assert approval.action == "enable"
+    assert approval.args == ("abc",)
+    assert "/maitu 参考 审核通过 <参考图ID>" in help_text()
 
     with pytest.raises(CommandParseError):
         parse_admin_command("/other 参考 列表")

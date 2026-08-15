@@ -216,6 +216,7 @@ python -m pip install -r requirements.txt
 /maitu 参考 重生成 <参考图ID>
 /maitu 参考 替换 <参考图ID>
 /maitu 参考 启用 <参考图ID>
+/maitu 参考 审核通过 <参考图ID>
 /maitu 参考 停用 <参考图ID>
 /maitu 参考 删除 <参考图ID>
 
@@ -230,6 +231,8 @@ python -m pip install -r requirements.txt
 /maitu 任务 重试 <任务ID>
 /maitu 任务 取消 <任务ID>
 ```
+
+场景参考在导入、提取或自动补库完成后会自动打标；标签通过校验且 `references.auto_enable_generated_references=true` 时会直接启用。此前因旧版场景标签提示词缺少字段而留下的“待审核”条目，重载插件后执行 `/maitu 参考 重标 <参考图ID>` 即可重新打标并按该开关自动启用；`/maitu 参考 审核通过 <参考图ID>` 是“启用”的别名，只接受标签有效的条目。
 
 删除参考图和清空人物参考是二次确认操作。第一次会返回一个只对当前管理员、五分钟内有效的令牌；不要把令牌写入日志、截图或仓库。第二次执行示例：
 

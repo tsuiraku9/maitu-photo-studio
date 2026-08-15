@@ -54,6 +54,19 @@ def _tool_text_ui(label: str, purpose: str, *, rows: int = 4) -> dict[str, Any]:
     )
 
 
+_LEGACY_BROKEN_TAG_SCENE_PROMPT = (
+    "请分析场景参考板并只输出符合 Schema 的 JSON："
+    '{{"room_type":"","scene_signature":"","confidence":0}}。'
+    "时间和光线由每次生图任务自行判断；confidence 必须是 0 到 1 之间的小数。"
+)
+_DEFAULT_TAG_SCENE_PROMPT = (
+    "请分析场景参考板并只输出符合 Schema 的 JSON："
+    '{{"room_type":"","privacy_eligible":false,"scene_signature":"","confidence":0}}。'
+    "privacy_eligible 仅当参考板确实是卧室、浴室、客厅等室内私密小空间时为 true；"
+    "confidence 必须是 0 到 1 之间的小数，禁止使用百分制。"
+)
+
+
 class PluginSection(PluginConfigBase):
     """插件开关、管理员命令与权限配置。"""
 
@@ -574,11 +587,7 @@ class PromptSection(PluginConfigBase):
         ),
     )
     tag_scene: str = Field(
-        default=(
-            "请分析场景参考板并只输出符合 Schema 的 JSON："
-            '{{"room_type":"","scene_signature":"","confidence":0}}。'
-            "时间和光线由每次生图任务自行判断；confidence 必须是 0 到 1 之间的小数。"
-        ),
+        default=_DEFAULT_TAG_SCENE_PROMPT,
         description="场景标签提示词",
         json_schema_extra=_prompt_ui(
             "场景自动标签提示词",
@@ -1074,6 +1083,8 @@ class PromptSection(PluginConfigBase):
                     value = str(parameters.get(parameter_name) or "").strip()
                     if value:
                         migrated[f"{prefix}_{parameter_name}"] = value
+        if str(migrated.get("tag_scene") or "").strip() == _LEGACY_BROKEN_TAG_SCENE_PROMPT:
+            migrated["tag_scene"] = _DEFAULT_TAG_SCENE_PROMPT
         return migrated
 
     @property
