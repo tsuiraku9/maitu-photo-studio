@@ -11,9 +11,9 @@ from typing import Any, Literal
 
 try:  # pragma: no cover - exercised in the real MaiBot runner
     from maibot_sdk import Field, PluginConfigBase
-    from pydantic import model_validator
+    from pydantic import field_validator, model_validator
 except ImportError:  # lightweight fallback used by local unit tests
-    from pydantic import BaseModel, model_validator
+    from pydantic import BaseModel, field_validator, model_validator
     from pydantic import Field as _PydanticField
 
     class PluginConfigBase(BaseModel):
@@ -73,7 +73,7 @@ class PluginSection(PluginConfigBase):
     __ui_label__ = "插件与权限"
     __ui_icon__ = "photo_camera"
     config_version: str = Field(
-        default="1.3.0",
+        default="1.4.0",
         description="插件配置版本",
         json_schema_extra=_ui("配置版本", "用于配置迁移，请勿手动修改。"),
     )
@@ -159,6 +159,38 @@ class OpenAISection(PluginConfigBase):
         description="允许下载的单张结果上限",
         json_schema_extra=_ui("响应图片上限（字节）", "拒绝下载超过此大小的单张模型结果，防止异常响应占用过多内存。"),
     )
+
+    generation_max_retries: int = Field(
+        default=0,
+        description="生图失败后的最大重试次数",
+        json_schema_extra=_ui(
+            "生图最大重试次数",
+            "仅对可重试的网络错误、HTTP 429 和 5xx 生效；首次请求不计入此次数。默认 0 可避免重复计费。",
+        ),
+    )
+    generation_retry_backoff_seconds: float = Field(
+        default=1.0,
+        description="生图重试之间的基础等待时间（秒）",
+        json_schema_extra=_ui(
+            "生图重试等待时间（秒）",
+            "重试采用指数退避，实际等待时间逐次翻倍并限制在 60 秒以内；设为 0 可在测试或本地服务中立即重试。",
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_generation_retry_settings(self) -> "OpenAISection":
+        if not 0 <= self.generation_max_retries <= 5:
+            raise ValueError("generation_max_retries 必须介于 0 和 5 之间")
+        if not 0 <= self.generation_retry_backoff_seconds <= 60:
+            raise ValueError("generation_retry_backoff_seconds 必须介于 0 和 60 秒之间")
+        return self
+
+    @field_validator("generation_max_retries", "generation_retry_backoff_seconds", mode="before")
+    @classmethod
+    def _reject_boolean_retry_settings(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("生图重试设置不能使用布尔值")
+        return value
 
 
 class ModelTaskSection(PluginConfigBase):
@@ -358,6 +390,30 @@ class OutputSection(PluginConfigBase):
         default="normal",
         description="Planner 主动任务优先级",
         json_schema_extra=_ui("Planner 通知优先级", "传给 Maisaka 主动触发能力的优先级字符串。", placeholder="normal"),
+    )
+
+
+class LoggingSection(PluginConfigBase):
+    """叠加在 MaiBot 宿主日志上的插件生命周期日志控制。"""
+
+    __ui_label__ = "日志与诊断"
+    __ui_icon__ = "receipt_long"
+    enabled: bool = Field(
+        default=True,
+        description="是否输出插件生命周期日志",
+        json_schema_extra=_ui(
+            "启用插件日志",
+            "输出任务入队、生成、投递、重试、通知和失败等诊断事件；日志不会包含 API 密钥、完整提示词或图片数据。",
+        ),
+    )
+    minimum_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
+        default="INFO",
+        description="插件日志最低输出级别",
+        json_schema_extra=_ui(
+            "日志最低级别",
+            "DEBUG 会额外记录安全的流程细节；INFO 适合日常排查；WARNING 和 ERROR 仅保留异常事件。"
+            "最终是否显示还受 MaiBot 宿主日志级别影响。",
+        ),
     )
 
 
@@ -1164,6 +1220,7 @@ class PhotoPluginConfig(PluginConfigBase):
     continuity: ContinuitySection = Field(default_factory=ContinuitySection, description="按聊天隔离的写真连续性")
     tasks: TaskSection = Field(default_factory=TaskSection, description="后台任务队列与清理策略")
     output: OutputSection = Field(default_factory=OutputSection, description="图片投递和 Planner 通知")
+    logging: LoggingSection = Field(default_factory=LoggingSection, description="插件安全日志与诊断级别")
     prompts: PromptSection = Field(default_factory=PromptSection, description="所有可自定义的模型提示词与工具描述")
 
 

@@ -166,6 +166,20 @@ python -m pip install -r requirements.txt
    这只是提升自动调用效果的本地行为建议；不添加也不影响插件安装、配置或手动调用。根据画面是否包含 bot 本人选择工具，并避免对同一需求重复调用。`bot_config.toml` 是 MaiBot 的运行配置，不要提交到 Git。
 8. 让 Planner 调用对应工具，并使用返回的 `task_id` 查询进度。图片成功投递后，默认会追加上下文并唤醒 Planner；可通过 `output.notify_planner` 关闭。
 
+### 生图失败重试
+
+`openai.generation_max_retries` 控制生图请求失败后的额外尝试次数，范围为 `0..5`，默认值为 `0`。只有网络错误、HTTP 429 和 HTTP 5xx 会重试；配置校验、响应解析和图片解码错误会立即失败。
+
+`openai.generation_retry_backoff_seconds` 是指数退避的基础等待时间，范围为 `0..60` 秒，默认值为 `1` 秒。每次重试都会记录不含密钥的错误类别、HTTP 状态、尝试次数和等待时间。重试可能让服务商重复计费；只有确认网关支持幂等或接受重复请求时才应启用。
+
+### 日志与诊断
+
+日志由 MaiBot 宿主统一接收、轮转和保留。`logging.enabled` 默认开启；`logging.minimum_level` 可设为 `DEBUG`、`INFO`、`WARNING` 或 `ERROR`。日志会覆盖插件加载、任务入队、图片服务请求、重试、生成、投递、Planner 通知、参考图处理和清理，并包含任务 ID、任务类型、聊天流和安全的错误类别。
+
+为保护隐私，插件不会记录 API Key、Authorization、完整提示词、人格文本、原始消息、图片内容或任务载荷；即使异常文本意外包含常见密钥形式，也会在写入日志前脱敏。宿主自身的日志级别仍可能进一步过滤插件日志。
+
+升级到含新配置字段的版本后，请先重载插件。MaiBot 会根据 `plugin.config_version` 补齐已有 `config.toml` 缺失的默认字段，并保留仍兼容的已有配置值；若 WebUI 尚未显示新项，刷新页面后重新打开插件配置。Docker 部署可通过 `docker logs <core-container>` 查看宿主日志，非容器部署可查看 MaiBot 的 `data/MaiMBot/logs/` 目录。
+
 ## 工具选择
 
 ### `generate_photo`

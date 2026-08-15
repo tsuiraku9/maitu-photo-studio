@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import logging
 
 import httpx
 import pytest
@@ -645,6 +646,18 @@ def test_http_error_redacts_secrets_and_marks_retryability() -> None:
     assert caught.value.retryable is True
 
 
+def test_provider_errors_redact_json_style_credentials() -> None:
+    secret = "json-provider-secret"
+    error = ProviderHTTPError(
+        f'{{"api_key":"{secret}","token":"{secret}"}}',
+        status_code=503,
+        retryable=True,
+    )
+
+    assert secret not in str(error)
+    assert '"api_key":"[REDACTED]"' in str(error)
+
+
 def test_provider_never_cross_mode_retries_after_failure() -> None:
     paths: list[str] = []
 
@@ -667,3 +680,112 @@ def test_provider_never_cross_mode_retries_after_failure() -> None:
         _run(scenario())
 
     assert paths == ["/v1/chat/completions"]
+
+
+def test_provider_retries_retryable_generation_failures(caplog: pytest.LogCaptureFixture) -> None:
+    image = _png("green")
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(503, text="temporarily unavailable", request=request)
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(image).decode()}]},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                max_retries=1,
+                retry_backoff_seconds=0,
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with caplog.at_level(logging.WARNING):
+        result = _run(scenario())
+
+    assert result.data == image
+    assert attempts == 2
+    assert "生图请求失败，准备重试" in caplog.text
+    assert "HTTP状态=503" in caplog.text
+
+
+def test_provider_retry_reuses_binary_stream_references() -> None:
+    result_image = _png("green")
+    reference_image = _png("blue")
+    request_bodies: list[bytes] = []
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        request_bodies.append(request.content)
+        if attempts == 1:
+            return httpx.Response(503, text="temporarily unavailable", request=request)
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(result_image).decode()}]},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                max_retries=1,
+                retry_backoff_seconds=0,
+                client=client,
+            )
+            return await provider.generate("photo", images=[io.BytesIO(reference_image)])
+
+    assert _run(scenario()).data == result_image
+    assert attempts == 2
+    assert all(reference_image in body for body in request_bodies)
+
+
+def test_provider_does_not_retry_nonretryable_generation_failures() -> None:
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(400, text="invalid request", request=request)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                generation_model="image-model",
+                max_retries=5,
+                retry_backoff_seconds=0,
+                client=client,
+            )
+            return await provider.generate("photo")
+
+    with pytest.raises(ProviderHTTPError) as caught:
+        _run(scenario())
+
+    assert caught.value.status_code == 400
+    assert attempts == 1
+
+
+@pytest.mark.parametrize("max_retries", [-1, 6, True])
+def test_provider_rejects_invalid_retry_count(max_retries: int) -> None:
+    with pytest.raises(ProviderConfigError, match="max_retries"):
+        OpenAICompatibleProvider(
+            "https://api.example.test",
+            "test-key-value",
+            generation_model="image-model",
+            max_retries=max_retries,
+        )

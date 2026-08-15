@@ -19,6 +19,7 @@ from .config import PhotoPluginConfig
 from .continuity import ContinuityManager, normalize_scene_signature
 from .gallery import DuplicateReferenceError, ReferenceGallery, file_sha256
 from .llm_adapter import MaiBotLLMAdapter
+from .logging_utils import PluginEventLogger, diagnostic_error, redact_text
 from .models import (
     ImageTask,
     ReferenceAsset,
@@ -145,6 +146,11 @@ class PhotoStudioService:
         )
         self.prompts = PromptService(config.prompts)
         self.llm = MaiBotLLMAdapter(ctx)
+        self.log = PluginEventLogger(
+            getattr(ctx, "logger", None),
+            enabled=config.logging.enabled,
+            minimum_level=config.logging.minimum_level,
+        )
         self.selector = ReferenceSelector(
             self.gallery,
             self.continuity,
@@ -162,11 +168,18 @@ class PhotoStudioService:
             poll_interval=config.tasks.poll_interval_seconds,
             max_queue_size=config.tasks.max_queue_size,
             logger=ctx.logger,
+            event_logger=self.log,
         )
 
     async def start(self) -> None:
-        self.cleanup_expired()
+        cleanup = self.cleanup_expired()
         await self.tasks.start()
+        self.log.info(
+            "后台任务服务已启动",
+            worker_count=self.config.tasks.worker_count,
+            cleaned_results=cleanup["cleaned_results"],
+            deleted_tasks=cleanup["deleted_tasks"],
+        )
         if self._reference_scan_task is None:
             self._reference_scan_task = asyncio.create_task(
                 self._run_startup_reference_scan(),
@@ -174,6 +187,7 @@ class PhotoStudioService:
             )
 
     async def close(self) -> None:
+        self.log.info("后台任务服务开始关闭")
         scan_task = self._reference_scan_task
         self._reference_scan_task = None
         if scan_task is not None:
@@ -186,6 +200,7 @@ class PhotoStudioService:
             await self._provider.aclose()
             self._provider = None
         self.storage.close()
+        self.log.info("后台任务服务已关闭")
 
     async def wait_for_startup_reference_scan(self) -> dict[str, int]:
         """Wait for the one-shot startup gallery scan, primarily for diagnostics."""
@@ -214,10 +229,10 @@ class PhotoStudioService:
                 candidates = sorted(directory.iterdir(), key=lambda path: path.name.casefold())
             except OSError as exc:
                 result["errors"] += 1
-                self.ctx.logger.warning(
-                    "Reference startup scan could not list %s: %s",
-                    directory,
-                    _safe_error(exc),
+                self.log.warning(
+                    "启动扫描无法列出参考图目录",
+                    category=category.value,
+                    error_kind=_diagnostic_error(exc),
                 )
                 continue
 
@@ -231,10 +246,10 @@ class PhotoStudioService:
                     current = self.gallery.get_person()
                     if current is not None:
                         result["person_conflicts"] += 1
-                        self.ctx.logger.warning(
-                            "Reference startup scan kept %s because person asset %s already exists",
-                            candidate.name,
-                            current.id,
+                        self.log.warning(
+                            "启动扫描保留人物参考图",
+                            file_name=candidate.name,
+                            existing_asset_id=current.id,
                         )
                         continue
 
@@ -244,10 +259,10 @@ class PhotoStudioService:
                     if existing is not None:
                         candidate.unlink(missing_ok=True)
                         result["duplicates"] += 1
-                        self.ctx.logger.info(
-                            "Reference startup scan removed duplicate %s (asset=%s)",
-                            candidate.name,
-                            existing.id,
+                        self.log.info(
+                            "启动扫描删除重复参考图",
+                            file_name=candidate.name,
+                            asset_id=existing.id,
                         )
                         continue
 
@@ -260,46 +275,46 @@ class PhotoStudioService:
                         candidate.unlink(missing_ok=True)
                     registered_paths.add(asset.reference_path.resolve())
                     result["imported"] += 1
-                    self.ctx.logger.info(
-                        "Reference startup scan imported %s as %s/%s (%s)",
-                        candidate.name,
-                        category.value,
-                        asset.id,
-                        asset.status.value,
+                    self.log.info(
+                        "启动扫描导入参考图",
+                        file_name=candidate.name,
+                        category=category.value,
+                        asset_id=asset.id,
+                        asset_status=asset.status.value,
                     )
                 except DuplicateReferenceError as exc:
                     if category == ReferenceCategory.PERSON:
                         result["person_conflicts"] += 1
-                        self.ctx.logger.warning(
-                            "Reference startup scan kept %s because a person reference already exists",
-                            candidate.name,
+                        self.log.warning(
+                            "启动扫描保留冲突的人物参考图",
+                            file_name=candidate.name,
                         )
                     else:
                         try:
                             candidate.unlink(missing_ok=True)
                         except OSError as unlink_exc:
                             result["errors"] += 1
-                            self.ctx.logger.warning(
-                                "Reference startup scan could not remove duplicate %s: %s",
-                                candidate.name,
-                                _safe_error(unlink_exc),
+                            self.log.warning(
+                                "启动扫描无法删除重复参考图",
+                                file_name=candidate.name,
+                                error_kind=_diagnostic_error(unlink_exc),
                             )
                             continue
                         result["duplicates"] += 1
-                        self.ctx.logger.info(
-                            "Reference startup scan removed duplicate %s (asset=%s)",
-                            candidate.name,
-                            exc.existing_id or "unknown",
+                        self.log.info(
+                            "启动扫描删除重复参考图",
+                            file_name=candidate.name,
+                            asset_id=exc.existing_id or "unknown",
                         )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001 - one bad drop must not stop startup
                     result["errors"] += 1
-                    self.ctx.logger.warning(
-                        "Reference startup scan could not import %s/%s: %s",
-                        category.value,
-                        candidate.name,
-                        _safe_error(exc),
+                    self.log.warning(
+                        "启动扫描无法导入参考图",
+                        category=category.value,
+                        file_name=candidate.name,
+                        error_kind=_diagnostic_error(exc),
                     )
 
         return result
@@ -310,17 +325,10 @@ class PhotoStudioService:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - startup must survive scanner failure
-            self.ctx.logger.error("Reference startup scan failed: %s", _safe_error(exc))
+            self.log.error("启动参考图扫描失败", error_kind=_diagnostic_error(exc))
             result = self._empty_reference_scan_result()
             result["errors"] = 1
-        self.ctx.logger.info(
-            "Reference startup scan complete: scanned=%s imported=%s duplicates=%s person_conflicts=%s errors=%s",
-            result["scanned"],
-            result["imported"],
-            result["duplicates"],
-            result["person_conflicts"],
-            result["errors"],
-        )
+        self.log.info("启动参考图扫描完成", **result)
         return result
 
     def _registered_reference_paths(self) -> set[Path]:
@@ -511,7 +519,18 @@ class PhotoStudioService:
                 self.payloads.put_upload(task.id, image)
                 payload["has_upload"] = True
             self.payloads.put(task.id, payload)
-            return self.tasks.submit(task)
+            queued = self.tasks.submit(task)
+            self.log.info(
+                "参考图任务已入队",
+                task_id=queued.id,
+                kind=queued.kind,
+                operation=operation,
+                category=category_value,
+                stream_id=queued.stream_id,
+                automatic=automatic,
+                parent_task_id=parent_task_id,
+            )
+            return queued
         except Exception:
             self.payloads.delete(task.id)
             self.payloads.delete_upload(task.id)
@@ -597,6 +616,13 @@ class PhotoStudioService:
         task.paid_request_started = False
         self.storage.update_task(task)
         self.tasks.wake()
+        self.log.info(
+            "任务已重新入队",
+            task_id=task.id,
+            kind=task.kind,
+            stream_id=task.stream_id,
+            notification_retry=bool(task.result_metadata.get("notification_retry")),
+        )
         return task
 
     def cancel_task(self, task_id: str) -> ImageTask:
@@ -610,6 +636,7 @@ class PhotoStudioService:
         self.storage.update_task(task)
         self.payloads.delete(task.id)
         self.payloads.delete_upload(task.id)
+        self.log.info("任务已取消", task_id=task.id, kind=task.kind, stream_id=task.stream_id)
         return task
 
     def cleanup_expired(self, *, now: datetime | None = None) -> dict[str, int]:
@@ -645,7 +672,10 @@ class PhotoStudioService:
                 task.result_metadata["result_cleaned_at"] = current.isoformat()
                 self.storage.update_task(task)
                 cleaned_results += 1
-        return {"cleaned_results": cleaned_results, "deleted_tasks": deleted_tasks}
+        result = {"cleaned_results": cleaned_results, "deleted_tasks": deleted_tasks}
+        if cleaned_results or deleted_tasks:
+            self.log.info("过期任务已清理", **result)
+        return result
 
     def _submit_generation(
         self,
@@ -657,7 +687,16 @@ class PhotoStudioService:
         task = self._new_task(kind=kind, invocation=invocation, prompt_text=prompt_text)
         try:
             self.payloads.put(task.id, payload)
-            return self.tasks.submit(task)
+            queued = self.tasks.submit(task)
+            self.log.info(
+                "生图任务已入队",
+                task_id=queued.id,
+                kind=queued.kind,
+                stream_id=queued.stream_id,
+                scope_key=queued.scope_key,
+                prompt_hash=queued.prompt_hash[:12],
+            )
+            return queued
         except Exception:
             self.payloads.delete(task.id)
             raise
@@ -688,7 +727,15 @@ class PhotoStudioService:
     async def _handle_task(self, claimed: ImageTask) -> None:
         task = self.storage.get_task(claimed.id)
         if task is None or task.status == TaskStatus.CANCELLED:
+            self.log.debug("跳过已取消或不存在的任务", task_id=claimed.id)
             return
+        self.log.info(
+            "任务开始处理",
+            task_id=task.id,
+            kind=task.kind,
+            stream_id=task.stream_id,
+            status=task.status.value,
+        )
         try:
             if task.kind == "notification_retry" or task.result_metadata.get("notification_retry"):
                 try:
@@ -720,9 +767,15 @@ class PhotoStudioService:
             if latest is not None and latest.status != TaskStatus.CANCELLED:
                 error = _safe_error(exc)
                 self.storage.set_task_status(task.id, TaskStatus.FAILED, error_message=error)
+                self.log.error(
+                    "任务处理失败",
+                    task_id=task.id,
+                    kind=task.kind,
+                    stream_id=task.stream_id,
+                    error_kind=_diagnostic_error(exc),
+                )
                 if task.kind in {"image", "scene_photo", "photo", "notification_retry"}:
                     await self._notify_failure(task.id, error)
-            raise
 
     async def _generate_scene_photo(self, task: ImageTask) -> None:
         """Generate a phone-like photo without person or outfit references."""
@@ -766,6 +819,14 @@ class PhotoStudioService:
             negative_prompt=self.config.prompts.negative_prompt,
         )
         prompt = f"{self.config.prompts.scene_photo_system.strip()}\n\n{user_prompt}".strip()
+        self.log.info(
+            "开始请求场景生图服务",
+            task_id=task.id,
+            stream_id=task.stream_id,
+            mode=self.config.openai.generation_mode,
+            model=str(payload.get("model_id") or self.config.openai.generation_model),
+            reference_count=len(references),
+        )
         self.storage.mark_task_request_started(task.id)
         generated = await self._provider_instance().generate(
             prompt,
@@ -793,6 +854,14 @@ class PhotoStudioService:
             TaskStatus.GENERATED,
             result_path=result_path,
             result_metadata={**metadata, "media_type": generated.media_type},
+        )
+        self.log.info(
+            "场景图片生成完成",
+            task_id=task.id,
+            stream_id=task.stream_id,
+            media_type=generated.media_type,
+            result_bytes=len(generated.data),
+            scene_reference_id=selection.scene.id if selection.scene else None,
         )
         if selection.scene is not None:
             self.gallery.record_usage([selection.scene.id])
@@ -869,6 +938,17 @@ class PhotoStudioService:
             negative_prompt=self.config.prompts.negative_prompt,
         )
         prompt = f"{self.config.prompts.photo_system.strip()}\n\n{user_prompt}".strip()
+        self.log.info(
+            "开始请求写真生图服务",
+            task_id=task.id,
+            stream_id=task.stream_id,
+            mode=self.config.openai.generation_mode,
+            model=str(payload.get("model_id") or self.config.openai.generation_model),
+            reference_count=len(references),
+            person_reference=person.id if person else None,
+            outfit_reference=selection.outfit.id if selection.outfit else None,
+            scene_reference=selection.scene.id if selection.scene else None,
+        )
         self.storage.mark_task_request_started(task.id)
         generated = await self._provider_instance().generate(
             prompt,
@@ -898,6 +978,14 @@ class PhotoStudioService:
             TaskStatus.GENERATED,
             result_path=result_path,
             result_metadata={**metadata, "media_type": generated.media_type},
+        )
+        self.log.info(
+            "写真图片生成完成",
+            task_id=task.id,
+            stream_id=task.stream_id,
+            media_type=generated.media_type,
+            result_bytes=len(generated.data),
+            scene_eligible=selection.scene_eligible,
         )
         used = [asset.id for asset in (person, selection.outfit, selection.scene) if asset is not None]
         self.gallery.record_usage(used)
@@ -934,6 +1022,13 @@ class PhotoStudioService:
             result_path=result_path,
             result_metadata={**dict(metadata), "media_type": generated.media_type},
         )
+        self.log.info(
+            "图片生成完成，等待投递",
+            task_id=task.id,
+            stream_id=task.stream_id,
+            media_type=generated.media_type,
+            result_bytes=len(generated.data),
+        )
         self.payloads.delete(task.id)
         await self._deliver(self.storage.get_task(task.id) or task)
 
@@ -942,6 +1037,7 @@ class PhotoStudioService:
             raise PhotoStudioError("生成结果文件不存在")
         latest = self.storage.get_task(task.id)
         if latest is not None and latest.status == TaskStatus.CANCELLED:
+            self.log.info("取消后的图片不再投递", task_id=task.id, stream_id=task.stream_id)
             return
         if latest is not None and latest.result_metadata.get("image_sent"):
             if latest.status != TaskStatus.SENT:
@@ -950,6 +1046,11 @@ class PhotoStudioService:
                 await self._notify_success(latest)
             except Exception as exc:
                 self._merge_task_metadata(task.id, notification_error=_safe_error(exc))
+                self.log.warning(
+                    "已投递图片的 Planner 通知失败",
+                    task_id=task.id,
+                    error_kind=_diagnostic_error(exc),
+                )
             return
         image_base64 = base64.b64encode(task.result_path.read_bytes()).decode("ascii")
         response = await self.ctx.send.image(image_base64, task.stream_id or "", return_details=True)
@@ -957,6 +1058,7 @@ class PhotoStudioService:
         message_id = str(response.get("message_id") or "") if isinstance(response, Mapping) else ""
         if not sent:
             self._merge_task_metadata(task.id, image_sent=False, delivery_failed=True)
+            self.log.warning("图片投递失败", task_id=task.id, stream_id=task.stream_id)
             raise PhotoStudioError("图片投递失败")
         self._merge_task_metadata(
             task.id,
@@ -965,10 +1067,21 @@ class PhotoStudioService:
             platform_message_id=message_id or None,
         )
         self.storage.set_task_status(task.id, TaskStatus.SENT)
+        self.log.info(
+            "图片投递成功",
+            task_id=task.id,
+            stream_id=task.stream_id,
+            platform_message_id=message_id or None,
+        )
         try:
             await self._notify_success(self.storage.get_task(task.id) or task)
         except Exception as exc:
             self._merge_task_metadata(task.id, notification_error=_safe_error(exc))
+            self.log.warning(
+                "图片已投递但 Planner 通知失败",
+                task_id=task.id,
+                error_kind=_diagnostic_error(exc),
+            )
 
     async def _notify_success(self, task: ImageTask) -> None:
         latest = self.storage.get_task(task.id) or task
@@ -1003,6 +1116,7 @@ class PhotoStudioService:
         )
         _require_capability_success(trigger_result, "planner proactive trigger")
         self.storage.mark_task_planner_notified(task.id)
+        self.log.info("Planner 已收到成功通知", task_id=task.id, stream_id=latest.stream_id)
 
     async def _notify_failure(self, task_id: str, error: str) -> None:
         task = self.storage.get_task(task_id)
@@ -1033,18 +1147,43 @@ class PhotoStudioService:
             self.storage.mark_task_planner_notified(task.id)
         except Exception as exc:
             self._merge_task_metadata(task.id, notification_error=_safe_error(exc))
+            self.log.warning(
+                "Planner 失败通知未完成",
+                task_id=task.id,
+                error_kind=_diagnostic_error(exc),
+            )
 
     async def _process_reference_task(self, task: ImageTask) -> None:
         payload = self.payloads.get(task.id)
         operation = str(payload.get("operation") or "")
         category_text = str(payload.get("category") or "")
         category = ReferenceCategory(category_text) if category_text else None
+        self.log.info(
+            "开始处理参考图任务",
+            task_id=task.id,
+            stream_id=task.stream_id,
+            operation=operation,
+            category=category_text or None,
+            automatic=bool(payload.get("automatic")),
+        )
+
+        def mark_reference_request_started() -> None:
+            self.storage.mark_task_request_started(task.id)
+            self.log.info(
+                "开始请求参考图生图服务",
+                task_id=task.id,
+                stream_id=task.stream_id,
+                operation=operation,
+                mode=self.config.openai.reference_mode,
+                model=self.config.openai.reference_model,
+            )
+
         # Import and retag only need the MaiBot tagging model.  Avoid forcing
         # an OpenAI image provider for already-prepared uploads, so gallery
         # maintenance remains usable before generation credentials are set.
         service = self._reference_service(
             require_provider=operation in {"extract", "regenerate", "generate_person"},
-            before_provider_request=lambda: self.storage.mark_task_request_started(task.id),
+            before_provider_request=mark_reference_request_started,
         )
         asset: ReferenceAsset
         if operation == "generate_person":
@@ -1101,10 +1240,11 @@ class PhotoStudioService:
             try:
                 self._attach_automatic_reference_to_continuity(task, asset)
             except Exception as exc:  # The extracted asset remains usable even if continuity repair fails.
-                self.ctx.logger.warning(
-                    "自动补库参考图 %s 已入库，但未能写入连续性状态: %s",
-                    asset.id,
-                    _safe_error(exc),
+                self.log.warning(
+                    "自动补库参考图未写入连续性状态",
+                    task_id=task.id,
+                    asset_id=asset.id,
+                    error_kind=_diagnostic_error(exc),
                 )
         self.storage.set_task_status(
             task.id,
@@ -1119,6 +1259,14 @@ class PhotoStudioService:
         )
         self.payloads.delete(task.id)
         self.payloads.delete_upload(task.id)
+        self.log.info(
+            "参考图任务完成",
+            task_id=task.id,
+            stream_id=task.stream_id,
+            asset_id=asset.id,
+            category=asset.category.value,
+            asset_status=asset.status.value,
+        )
         if not bool(payload.get("automatic")) and task.stream_id:
             try:
                 sent = await self.ctx.send.text(
@@ -1128,6 +1276,11 @@ class PhotoStudioService:
                 self._merge_task_metadata(task.id, admin_notification_sent=bool(sent))
             except Exception as exc:
                 self._merge_task_metadata(task.id, admin_notification_error=_safe_error(exc))
+                self.log.warning(
+                    "参考图任务管理员通知失败",
+                    task_id=task.id,
+                    error_kind=_diagnostic_error(exc),
+                )
 
     def _attach_automatic_reference_to_continuity(self, task: ImageTask, asset: ReferenceAsset) -> bool:
         """Associate a completed automatic backfill with its still-current photo."""
@@ -1209,6 +1362,9 @@ class PhotoStudioService:
                 timeout=self.config.openai.request_timeout_seconds,
                 connect_timeout=self.config.openai.connect_timeout_seconds,
                 max_response_bytes=self.config.openai.max_response_bytes,
+                max_retries=self.config.openai.generation_max_retries,
+                retry_backoff_seconds=self.config.openai.generation_retry_backoff_seconds,
+                logger=self.log,
             )
         return self._provider
 
@@ -1297,10 +1453,10 @@ class PhotoStudioService:
         try:
             result = result_path.read_bytes()
         except OSError as exc:
-            self.ctx.logger.warning(
-                "任务 %s 已投递，但无法读取结果以自动补充参考图: %s",
-                parent.id,
-                _safe_error(exc),
+            self.log.warning(
+                "已投递图片无法读取，跳过自动补库",
+                task_id=parent.id,
+                error_kind=_diagnostic_error(exc),
             )
             return
         jobs: list[tuple[ReferenceCategory, str]] = []
@@ -1320,11 +1476,11 @@ class PhotoStudioService:
                     automatic=True,
                 )
             except Exception as exc:
-                self.ctx.logger.error(
-                    "任务 %s 自动补充 %s 参考图失败: %s",
-                    parent.id,
-                    category.value,
-                    _safe_error(exc),
+                self.log.error(
+                    "自动补充参考图任务创建失败",
+                    task_id=parent.id,
+                    category=category.value,
+                    error_kind=_diagnostic_error(exc),
                 )
 
     def _save_result(self, task_id: str, generated: GeneratedImage) -> Path:
@@ -1496,11 +1652,13 @@ def _mapping(value: Any) -> dict[str, Any]:
 def _safe_error(error: BaseException) -> str:
     if isinstance(error, ProviderError):
         return str(error)[:1000]
-    text = str(error)
-    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}", r"\1[REDACTED]", text)
-    text = re.sub(r"(?i)(?:sk|key|token)-[A-Za-z0-9._~-]{8,}", "[REDACTED]", text)
-    text = re.sub(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;\"']+", r"\1[REDACTED]", text)
-    return (text or type(error).__name__)[:1000]
+    return redact_text(error, limit=1000) or type(error).__name__
+
+
+def _diagnostic_error(error: BaseException) -> str:
+    """Return a stable error category suitable for logs without response text."""
+
+    return diagnostic_error(error)
 
 
 def _require_capability_success(result: Any, operation: str) -> None:

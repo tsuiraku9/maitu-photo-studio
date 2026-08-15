@@ -28,6 +28,7 @@ $packageFiles = @(
     "continuity.py",
     "gallery.py",
     "llm_adapter.py",
+    "logging_utils.py",
     "models.py",
     "prompts.py",
     "provider.py",

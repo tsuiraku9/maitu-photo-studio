@@ -7,6 +7,7 @@ import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 
+from .logging_utils import PluginEventLogger, diagnostic_error, redact_text
 from .models import ImageTask, TaskStatus
 from .storage import SQLiteStorage, StorageError
 
@@ -30,6 +31,7 @@ class TaskManager:
         poll_interval: float = 0.5,
         max_queue_size: int = 100,
         logger: logging.Logger | None = None,
+        event_logger: PluginEventLogger | None = None,
     ) -> None:
         self.storage = storage
         self.handler = handler
@@ -37,6 +39,7 @@ class TaskManager:
         self.poll_interval = max(0.05, float(poll_interval))
         self.max_queue_size = max(1, int(max_queue_size))
         self.logger = logger or logging.getLogger(__name__)
+        self.event_logger = event_logger
         self._wake = asyncio.Event()
         self._workers: list[asyncio.Task[None]] = []
         self._stopping = False
@@ -49,7 +52,13 @@ class TaskManager:
         self._stopping = False
         requeued, failed = self.storage.recover_interrupted_tasks()
         if failed:
-            self.logger.warning("%d 个已发起付费请求的任务被隔离为失败，避免重复计费", len(failed))
+            if self.event_logger is not None:
+                self.event_logger.warning(
+                    "已发起付费请求的任务被隔离为失败，避免重复计费",
+                    affected_task_count=len(failed),
+                )
+            else:
+                self.logger.warning("%d 个已发起付费请求的任务被隔离为失败，避免重复计费", len(failed))
         for index in range(self.worker_count):
             self._workers.append(asyncio.create_task(self._worker_loop(index), name=f"maitu-worker-{index}"))
         if requeued:
@@ -94,11 +103,35 @@ class TaskManager:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # handler owns detailed task state when possible
-                self.logger.exception("任务 %s worker %d 未处理异常", task.id, index)
+                if self.event_logger is not None:
+                    self.event_logger.error(
+                        "任务 worker 未处理异常",
+                        task_id=task.id,
+                        worker_index=index,
+                        error_kind=diagnostic_error(exc),
+                    )
+                else:
+                    self.logger.error(
+                        "任务 %s worker %d 未处理异常：error_kind=%s",
+                        task.id,
+                        index,
+                        diagnostic_error(exc),
+                    )
                 try:
-                    self.storage.set_task_status(task.id, TaskStatus.FAILED, error_message=str(exc)[:1000])
-                except Exception:
-                    self.logger.exception("无法记录任务 %s 的失败状态", task.id)
+                    self.storage.set_task_status(task.id, TaskStatus.FAILED, error_message=redact_text(exc, limit=1000))
+                except Exception as status_exc:
+                    if self.event_logger is not None:
+                        self.event_logger.error(
+                            "无法记录任务失败状态",
+                            task_id=task.id,
+                            error_kind=diagnostic_error(status_exc),
+                        )
+                    else:
+                        self.logger.error(
+                            "无法记录任务 %s 的失败状态：error_kind=%s",
+                            task.id,
+                            diagnostic_error(status_exc),
+                        )
 
     async def drain(self, timeout: float = 30.0) -> bool:
         """Wait until no queued/running tasks remain, primarily for tests."""

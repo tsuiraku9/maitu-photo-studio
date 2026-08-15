@@ -15,6 +15,7 @@ import base64
 import binascii
 import ipaddress
 import json
+import logging
 import re
 import socket
 from dataclasses import dataclass, field
@@ -24,9 +25,15 @@ from urllib.parse import unquote_to_bytes, urljoin, urlsplit
 
 import httpx
 
+from .logging_utils import redact_text
+
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_MAX_RESPONSE_BYTES = 25 * 1024 * 1024
 DEFAULT_MAX_IMAGE_REDIRECTS = 5
+DEFAULT_MAX_RETRIES = 0
+DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
+MAX_RETRIES = 5
+MAX_RETRY_BACKOFF_SECONDS = 60.0
 SUPPORTED_MODES = frozenset({"images_api", "chat_completions"})
 _IMAGE_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _BLOCKED_IMAGE_HOSTNAMES = frozenset({"localhost", "localhost.localdomain", "metadata.google.internal"})
@@ -86,20 +93,7 @@ class ProviderImageDecodeError(ProviderResponseError):
 def _redact(value: object) -> str:
     """Remove common API-key/token shapes from error text and diagnostics."""
 
-    text = str(value)
-    # OpenAI-style keys, generic sk-* keys, and bearer values.
-    text = re.sub(r"(?i)(?:sk|key|token)-[A-Za-z0-9._~-]{8,}", "[REDACTED]", text)
-    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}", r"\1[REDACTED]", text)
-    text = re.sub(
-        r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;\"']+",
-        r"\1[REDACTED]",
-        text,
-    )
-    # URL userinfo can contain credentials that do not resemble API keys.
-    text = re.sub(r"(?i)(https?://)[^\s/?#]*@", r"\1[REDACTED]@", text)
-    # Do not expose query-string credentials in a provider URL.
-    text = re.sub(r"(?i)([?&](?:api[_-]?key|token|key)=)[^&\s]+", r"\1[REDACTED]", text)
-    return text[:4000]
+    return redact_text(value, limit=4000)
 
 
 def normalize_base_url(base_url: str) -> str:
@@ -236,6 +230,8 @@ class ProviderConfig:
     timeout: float = DEFAULT_TIMEOUT
     connect_timeout: float = 15.0
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
+    max_retries: int = DEFAULT_MAX_RETRIES
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "base_url", normalize_base_url(self.base_url))
@@ -247,6 +243,16 @@ class ProviderConfig:
             raise ProviderConfigError("connect_timeout must be positive")
         if self.max_response_bytes <= 0:
             raise ProviderConfigError("max_response_bytes must be positive")
+        if not isinstance(self.max_retries, int) or isinstance(self.max_retries, bool):
+            raise ProviderConfigError("max_retries must be an integer")
+        if not 0 <= self.max_retries <= MAX_RETRIES:
+            raise ProviderConfigError(f"max_retries must be between 0 and {MAX_RETRIES}")
+        if not isinstance(self.retry_backoff_seconds, (int, float)) or isinstance(self.retry_backoff_seconds, bool):
+            raise ProviderConfigError("retry_backoff_seconds must be a number")
+        if not 0 <= self.retry_backoff_seconds <= MAX_RETRY_BACKOFF_SECONDS:
+            raise ProviderConfigError(
+                f"retry_backoff_seconds must be between 0 and {MAX_RETRY_BACKOFF_SECONDS}"
+            )
 
 
 @dataclass(frozen=True)
@@ -368,6 +374,23 @@ def _coerce_input_bytes(value: ImageInput) -> tuple[bytes, str, str | None]:
     raise ProviderImageDecodeError("unsupported reference image input")
 
 
+def _materialize_image_inputs(images: Sequence[ImageInput]) -> tuple[GeneratedImage, ...]:
+    """Read reference inputs once so every retry uses identical image bytes."""
+
+    result: list[GeneratedImage] = []
+    for index, image in enumerate(images):
+        data, media_type, source_url = _coerce_input_bytes(image)
+        result.append(
+            GeneratedImage(
+                data=data,
+                media_type=media_type,
+                source_url=source_url,
+                index=index,
+            )
+        )
+    return tuple(result)
+
+
 def _json_safe_excerpt(response: httpx.Response) -> str:
     try:
         body = response.text
@@ -396,9 +419,12 @@ class OpenAICompatibleProvider:
         timeout: float = DEFAULT_TIMEOUT,
         connect_timeout: float = 15.0,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
         client: httpx.AsyncClient | None = None,
         http_client: httpx.AsyncClient | None = None,
         headers: Mapping[str, str] | None = None,
+        logger: logging.Logger | None = None,
     ) -> None:
         if isinstance(base_url, ProviderConfig):
             config = base_url
@@ -416,6 +442,8 @@ class OpenAICompatibleProvider:
                 timeout=timeout,
                 connect_timeout=connect_timeout,
                 max_response_bytes=max_response_bytes,
+                max_retries=max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
             )
         self.config = config
         self.base_url = config.base_url
@@ -427,6 +455,9 @@ class OpenAICompatibleProvider:
         self.timeout = config.timeout
         self.connect_timeout = config.connect_timeout
         self.max_response_bytes = config.max_response_bytes
+        self.max_retries = config.max_retries
+        self.retry_backoff_seconds = float(config.retry_backoff_seconds)
+        self.logger = logger or logging.getLogger(__name__)
         self._owns_client = client is None and http_client is None
         self.client = (
             client
@@ -659,7 +690,6 @@ class OpenAICompatibleProvider:
             if not body:
                 raise ProviderImageDecodeError("provider returned an empty image")
             return [GeneratedImage(data=body, media_type=content_type.split(";", 1)[0])]
-
         try:
             payload = response.json()
         except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
@@ -828,40 +858,67 @@ class OpenAICompatibleProvider:
             raise ProviderConfigError("provide only one of images, references, or image_refs")
         if references is not None and image_refs is not None:
             raise ProviderConfigError("provide only one of references or image_refs")
+        # File-like inputs are consumable.  Freeze all inputs before the retry
+        # loop so a retry sends the same reference images as the first request.
+        materialized_refs = _materialize_image_inputs(refs)
 
-        if selected_mode == "images_api":
-            if refs:
-                response = await self._images_edit(
-                    prompt,
-                    refs,
-                    model=selected_model,
-                    size=size,
-                    negative_prompt=negative_prompt,
-                    n=n,
-                    response_format=response_format,
-                    extra=extra,
+        for attempt in range(self.max_retries + 1):
+            try:
+                if selected_mode == "images_api":
+                    if materialized_refs:
+                        response = await self._images_edit(
+                            prompt,
+                            materialized_refs,
+                            model=selected_model,
+                            size=size,
+                            negative_prompt=negative_prompt,
+                            n=n,
+                            response_format=response_format,
+                            extra=extra,
+                        )
+                    else:
+                        response = await self._images_generate(
+                            prompt,
+                            model=selected_model,
+                            size=size,
+                            negative_prompt=negative_prompt,
+                            n=n,
+                            response_format=response_format,
+                            extra=extra,
+                        )
+                else:
+                    response = await self._chat_generate(
+                        prompt,
+                        materialized_refs,
+                        model=selected_model,
+                        size=size,
+                        negative_prompt=negative_prompt,
+                        n=n,
+                        extra=extra,
+                    )
+                return await self._parse_response(response)
+            except ProviderError as exc:
+                if not exc.retryable or attempt >= self.max_retries:
+                    raise
+                retry_number = attempt + 1
+                delay = min(
+                    self.retry_backoff_seconds * (2 ** attempt),
+                    MAX_RETRY_BACKOFF_SECONDS,
                 )
-            else:
-                response = await self._images_generate(
-                    prompt,
-                    model=selected_model,
-                    size=size,
-                    negative_prompt=negative_prompt,
-                    n=n,
-                    response_format=response_format,
-                    extra=extra,
+                self.logger.warning(
+                    "生图请求失败，准备重试：次数=%d/%d 错误类别=%s HTTP状态=%s 等待=%.2f秒",
+                    retry_number,
+                    self.max_retries,
+                    exc.code,
+                    exc.status_code if exc.status_code is not None else "-",
+                    delay,
                 )
-        else:
-            response = await self._chat_generate(
-                prompt,
-                refs,
-                model=selected_model,
-                size=size,
-                negative_prompt=negative_prompt,
-                n=n,
-                extra=extra,
-            )
-        return await self._parse_response(response)
+                if delay > 0:
+                    await asyncio.sleep(delay)
+
+        # The loop always returns or raises; keep a defensive error for static
+        # analyzers if the retry bounds are changed in the future.
+        raise ProviderResponseError("image provider request did not produce a result")
 
     async def generate(self, prompt: str, **kwargs: Any) -> GeneratedImage:
         results = await self.generate_many(prompt, **kwargs)

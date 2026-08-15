@@ -19,6 +19,7 @@ if __package__:
         parse_tags,
     )
     from .maitu_photo.config import PhotoPluginConfig, ToolDescriptionSection
+    from .maitu_photo.logging_utils import diagnostic_error, redact_text
     from .maitu_photo.models import AssetStatus, ReferenceAsset, ReferenceCategory, TaskStatus
     from .maitu_photo.reference_service import validate_reference_tags
     from .maitu_photo.runtime import (
@@ -45,6 +46,7 @@ else:  # direct local import used by unit tests
         parse_tags,
     )
     from maitu_photo.config import PhotoPluginConfig, ToolDescriptionSection
+    from maitu_photo.logging_utils import diagnostic_error, redact_text
     from maitu_photo.models import AssetStatus, ReferenceAsset, ReferenceCategory, TaskStatus
     from maitu_photo.reference_service import validate_reference_tags
     from maitu_photo.runtime import (
@@ -136,7 +138,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         data_dir = Path(self.ctx.paths.data_dir)
         self._service = PhotoStudioService(self.ctx, self.config, data_dir)
         await self._service.start()
-        self.ctx.logger.info("麦麦写真插件已加载，数据目录=%s", data_dir)
+        self._service.log.info("插件已加载", data_dir=data_dir)
 
     async def on_unload(self) -> None:
         if self._service is not None:
@@ -156,10 +158,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             await self._service.close()
         self._service = PhotoStudioService(self.ctx, self.config, self.ctx.paths.data_dir)
         await self._service.start()
-        self.ctx.logger.info(
-            "麦麦写真插件运行配置已热更新(version=%s)；工具描述或命令前缀变更需重载插件",
-            version,
-        )
+        self._service.log.info("插件运行配置已热更新", version=version, reload_scope=scope)
 
     def get_components(self) -> list[dict[str, Any]]:
         """Inject configurable Tool text and command prefix at registration."""
@@ -530,6 +529,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             return True, text or "操作完成", 3
         except Exception as exc:
             text = self._error_text(exc)
+            self._log_failure("管理员命令执行失败", exc, stream_id=stream_id)
             if stream_id:
                 await self.ctx.send.text(text, stream_id)
             return False, text, 3
@@ -1007,14 +1007,20 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
 
     @staticmethod
     def _error_text(exc: BaseException) -> str:
-        text = str(exc).strip() or type(exc).__name__
-        text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}", r"\1[REDACTED]", text)
-        text = re.sub(r"(?i)(?:sk|key|token)-[A-Za-z0-9._~-]{8,}", "[REDACTED]", text)
-        return text[:1000]
+        return redact_text(exc, limit=1000) or type(exc).__name__
 
-    @classmethod
-    def _tool_error(cls, exc: BaseException) -> dict[str, Any]:
-        return {"success": False, "error": cls._error_text(exc), "content": cls._error_text(exc)}
+    def _tool_error(self, exc: BaseException) -> dict[str, Any]:
+        error = self._error_text(exc)
+        self._log_failure("工具调用失败", exc)
+        return {"success": False, "error": error, "content": error}
+
+    def _log_failure(self, event: str, exc: BaseException, **fields: Any) -> None:
+        if self._service is not None:
+            self._service.log.warning(event, error_kind=diagnostic_error(exc), **fields)
+            return
+        context = getattr(self, "_ctx", None)
+        if context is not None:
+            context.logger.warning("麦麦写真 | %s | error_kind=%s", event, diagnostic_error(exc))
 
 
 def create_plugin() -> MaiTuPhotoPlugin:
