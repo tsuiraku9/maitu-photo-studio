@@ -209,6 +209,7 @@ class ReferenceSelector:
         scene_candidates.sort(key=lambda item: (-self._score(item, scene_hint), item.use_count, item.id))
 
         candidates = outfit_candidates[:12] + scene_candidates[:12]
+        selected_outfit_is_null = False
         if candidates and (outfit is None or scene is None):
             payload = json.dumps([item.as_selection_metadata() for item in candidates], ensure_ascii=False)
             try:
@@ -222,7 +223,9 @@ class ReferenceSelector:
                     temperature=self._config_value("temperature", 0.1),
                     max_tokens=self._config_value("max_tokens", 2048),
                 )
-                selected_outfit = str(selected.get("outfit_id") or "").strip()
+                selected_outfit_value = selected.get("outfit_id")
+                selected_outfit_is_null = "outfit_id" in selected and selected_outfit_value is None
+                selected_outfit = str(selected_outfit_value or "").strip()
                 selected_scene = str(selected.get("scene_id") or "").strip()
                 if outfit is None and selected_outfit:
                     candidate = self.gallery.get(selected_outfit)
@@ -247,7 +250,7 @@ class ReferenceSelector:
             except (LLMAdapterError, ValueError, TypeError):
                 reasons["selection"] = "llm_failed_deterministic_fallback"
 
-        if outfit is None and outfit_candidates:
+        if outfit is None and outfit_candidates and not selected_outfit_is_null:
             outfit = outfit_candidates[0]
             reasons["outfit"] = "score"
         if scene is None and scene_candidates:

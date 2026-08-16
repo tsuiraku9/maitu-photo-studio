@@ -667,6 +667,8 @@ class PromptSection(PluginConfigBase):
     select_references: str = Field(
         default=(
             "根据需求和候选参考图元数据选择最合适的 ID。若没有明确冲突，优先复用已有且最近使用的服装参考图；"
+            "如果没有明确匹配当前需求的服装候选，必须将 outfit_id 设为 null，禁止为了填充字段选择不合适的服装；"
+            "服装为 null 时表示回退到文字服装提示；"
             "只输出符合 Schema 的 JSON："
             '{{"outfit_id":null,"scene_id":null,"reason":""}}\n'
             "需求：{description}\n候选：{candidate_json}"

@@ -759,7 +759,7 @@ def test_photo_prefers_recently_used_outfit_when_candidates_tie(tmp_path: Path) 
             [
                 {"eligible": False, "scene_signature": "street", "reason": "public"},
                 {"scene_signature": "street", "changed": False},
-                {"outfit_id": None, "scene_id": None, "reason": "no preference"},
+                [],
             ]
         )
         service = PhotoStudioService(ctx, config, tmp_path / "data")
@@ -813,6 +813,55 @@ def test_photo_prefers_recently_used_outfit_when_candidates_tie(tmp_path: Path) 
         assert references["outfit"].asset_id == recent.id
         assert references["outfit"].selection_source == "score"
         assert provider.calls[0][1]["images"][1] == recent_bytes
+        await service.close()
+
+    asyncio.run(scenario())
+
+
+def test_photo_respects_null_outfit_selection_and_uses_text_fallback(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = _config()
+        config.references.auto_extract_missing = False
+        config.references.require_person_reference = False
+        ctx = _Context(
+            [
+                {"eligible": False, "scene_signature": "street", "reason": "public"},
+                {"scene_signature": "street", "changed": False},
+                {"outfit_id": None, "scene_id": None, "reason": "no_matching_outfit"},
+            ]
+        )
+        service = PhotoStudioService(ctx, config, tmp_path / "data")
+        outfit_id = _add_reference(
+            service,
+            tmp_path,
+            ReferenceCategory.OUTFIT,
+            _png("green"),
+            {
+                "type": "formal suit",
+                "wearing_scenes": ["office"],
+                "seasons": ["winter"],
+                "styles": ["formal"],
+                "confidence": 1.0,
+            },
+        )
+        provider = _Provider([_png("white")])
+        service._provider = provider  # type: ignore[assignment]
+        await service.start()
+
+        task = service.submit_photo(
+            _invocation(),
+            description="街边夏日休闲照片",
+            outfit_hint="casual summer",
+            scene_hint="街道",
+        )
+        assert await service.tasks.drain(timeout=3)
+
+        references = {item.role: item for item in service.storage.list_task_references(task.id)}
+        assert references["outfit"].asset_id is None
+        assert references["outfit"].selection_source == "text_fallback"
+        assert references["outfit"].fallback_reason == "text_fallback"
+        assert outfit_id not in [item.asset_id for item in references.values()]
+        assert provider.calls[0][1]["images"] is None
         await service.close()
 
     asyncio.run(scenario())
