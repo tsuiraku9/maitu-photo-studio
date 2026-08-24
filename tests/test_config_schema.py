@@ -18,6 +18,7 @@ from maitu_photo.config import (
     TaskSection,
     ToolDescriptionSection,
 )
+from maitu_photo.prompts import PromptService, PromptTemplateError
 
 _CHINESE_TEXT = re.compile(r"[\u4e00-\u9fff]")
 
@@ -43,6 +44,38 @@ def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
 
 def test_default_scene_tag_prompt_requests_privacy_eligibility() -> None:
     assert '"privacy_eligible":false' in PhotoPluginConfig().prompts.tag_scene
+
+
+def test_generation_templates_do_not_expose_reference_labels() -> None:
+    config = PhotoPluginConfig()
+    schema = generate_plugin_config_schema(PhotoPluginConfig)
+    prompt_fields = schema["sections"]["prompts"]["fields"]
+
+    assert "reference_labels" not in config.prompts.photo_user
+    assert "reference_labels" not in config.prompts.scene_photo_user
+    assert "reference_labels" not in prompt_fields["photo_user"]["hint"]
+    assert "reference_labels" not in prompt_fields["scene_photo_user"]["hint"]
+
+
+@pytest.mark.parametrize("field_name", ["photo_user", "scene_photo_user"])
+def test_generation_templates_reject_removed_reference_labels_placeholder(field_name: str) -> None:
+    with pytest.raises(ValueError, match="reference_labels 已不再支持"):
+        PhotoPluginConfig.model_validate({"prompts": {field_name: "参考图说明：{reference_labels}"}})
+
+
+def test_prompt_renderer_defensively_rejects_removed_reference_labels_placeholder() -> None:
+    config = PhotoPluginConfig()
+    object.__setattr__(config.prompts, "photo_user", "参考图说明：{reference_labels}")
+
+    with pytest.raises(PromptTemplateError, match="reference_labels"):
+        PromptService(config.prompts).render(
+            "photo_user",
+            description="拍摄需求",
+            person_prompt="人物约束",
+            outfit_prompt="服装约束",
+            scene_prompt="场景约束",
+            negative_prompt="负面词",
+        )
 
 
 def test_generation_retry_settings_have_safe_defaults_and_bounds() -> None:

@@ -7,6 +7,7 @@ the active values in the plugin-local ``config.toml``.
 
 from __future__ import annotations
 
+import string
 from typing import Any, Literal
 
 try:  # pragma: no cover - exercised in the real MaiBot runner
@@ -465,7 +466,7 @@ class PromptSection(PluginConfigBase):
     )
     scene_photo_user: str = Field(
         default=(
-            "拍摄需求：{description}\n场景提示：{scene_prompt}\n参考图说明：{reference_labels}\n"
+            "拍摄需求：{description}\n场景提示：{scene_prompt}\n"
             "负面要求：{negative_prompt}\n"
             "要求：这是手机拍摄的真实生活照片，不要出现 bot 本人，不要生成插画或海报。"
         ),
@@ -474,8 +475,7 @@ class PromptSection(PluginConfigBase):
             "无人物环境照片 · 用户提示词",
             "拼在系统提示词后面，发给生图模型。",
             "{description} 规划器填写的完整拍摄需求；"
-            "{scene_prompt} 场景参考标签或场景文字回退；"
-            "{reference_labels} 本次实际传入的参考图角色 JSON；"
+            "{scene_prompt} 场景参考图约束或场景文字回退；"
             "{negative_prompt} 下方「默认负面提示词」字段。",
         ),
     )
@@ -495,7 +495,7 @@ class PromptSection(PluginConfigBase):
     photo_user: str = Field(
         default=(
             "拍摄需求：{description}\n人物提示：{person_prompt}\n服装提示：{outfit_prompt}\n"
-            "场景提示：{scene_prompt}\n参考图说明：{reference_labels}\n负面要求：{negative_prompt}\n"
+            "场景提示：{scene_prompt}\n负面要求：{negative_prompt}\n"
             "要求：这是手机拍摄的真实生活照片，优先自然、随意、可直接发到聊天里的观感。"
         ),
         description="含人物写真用户提示词",
@@ -503,13 +503,21 @@ class PromptSection(PluginConfigBase):
             "含人物写真 · 用户提示词",
             "拼在系统提示词后面，发给生图模型。",
             "{description} 规划器填写的完整拍摄需求；"
-            "{person_prompt} 人物参考标签，或注入 MaiBot 人格设定的「人物文字回退模板」渲染结果；"
-            "{outfit_prompt} 服装参考标签或「服装文字回退提示词」；"
-            "{scene_prompt} 场景参考标签或「场景文字回退模板」；"
-            "{reference_labels} 本次实际传入的参考图角色 JSON；"
+            "{person_prompt} 人物参考图约束，或注入 MaiBot 人格设定的「人物文字回退模板」渲染结果；"
+            "{outfit_prompt} 服装参考图约束或「服装文字回退提示词」；"
+            "{scene_prompt} 场景参考图约束或「场景文字回退模板」；"
             "{negative_prompt} 下方「默认负面提示词」字段。",
         ),
     )
+
+    @field_validator("scene_photo_user", "photo_user")
+    @classmethod
+    def _reject_reference_labels_placeholder(cls, value: str) -> str:
+        for _, field_name, _, _ in string.Formatter().parse(value):
+            if field_name and field_name.split(".", 1)[0].split("[", 1)[0] == "reference_labels":
+                raise ValueError("reference_labels 已不再支持；请删除该占位符，仅保留参考图约束")
+        return value
+
     negative_prompt: str = Field(
         default=(
             "明显的 AI 痕迹、塑料皮肤、过度磨皮、错误手指、重复人物、文字、水印、畸形肢体、"

@@ -802,20 +802,10 @@ class PhotoStudioService:
         if selection.scene is not None:
             references.append(selection.scene.reference_path.read_bytes())
         scene_prompt = self._scene_prompt(selection.scene, scene_hint)
-        reference_labels = json.dumps(
-            {
-                "person": None,
-                "outfit": None,
-                "scene": _reference_label(selection.scene),
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
         user_prompt = self.prompts.render(
             "scene_photo_user",
             description=description,
             scene_prompt=scene_prompt,
-            reference_labels=reference_labels,
             negative_prompt=self.config.prompts.negative_prompt,
         )
         prompt = f"{self.config.prompts.scene_photo_system.strip()}\n\n{user_prompt}".strip()
@@ -919,22 +909,12 @@ class PhotoStudioService:
             str(payload.get("accessory_hint") or ""),
         )
         scene_prompt = self._scene_prompt(selection.scene, str(payload.get("scene_hint") or ""))
-        reference_labels = json.dumps(
-            {
-                "person": _reference_label(person),
-                "outfit": _reference_label(selection.outfit),
-                "scene": _reference_label(selection.scene),
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
         user_prompt = self.prompts.render(
             "photo_user",
             description=str(payload.get("description") or ""),
             person_prompt=person_prompt,
             outfit_prompt=outfit_prompt,
             scene_prompt=scene_prompt,
-            reference_labels=reference_labels,
             negative_prompt=self.config.prompts.negative_prompt,
         )
         prompt = f"{self.config.prompts.photo_system.strip()}\n\n{user_prompt}".strip()
@@ -1496,11 +1476,7 @@ class PhotoStudioService:
 
     def _person_prompt(self, person: ReferenceAsset | None, *, nickname: str = "", personality: str = "") -> str:
         if person is not None:
-            tags = _person_identity_tags(person.effective_tags)
-            return (
-                "严格保持人物参考图的面部与身份一致，不要根据人物参考图推断或复制服装。"
-                f"面部标签：{json.dumps(tags, ensure_ascii=False)}"
-            )
+            return "严格保持人物参考图的面部与身份一致，不要根据人物参考图推断或复制服装。"
         return self.prompts.render(
             "person_fallback_prompt",
             person_prompt=self.config.prompts.person_prompt,
@@ -1510,10 +1486,7 @@ class PhotoStudioService:
 
     def _outfit_prompt(self, outfit: ReferenceAsset | None, hint: str, accessory_hint: str = "") -> str:
         if outfit is not None:
-            base = (
-                "服装完全由服装参考图控制，不要使用人物参考图中的衣服。"
-                f"标签：{json.dumps(outfit.effective_tags, ensure_ascii=False)}"
-            )
+            base = "服装完全由服装参考图控制，不要使用人物参考图中的衣服。"
         else:
             base = self.config.prompts.clothing_style_prompt
         extras: list[str] = []
@@ -1527,8 +1500,7 @@ class PhotoStudioService:
         if scene is not None:
             base = (
                 "场景参考图仅用于还原空间结构、固定布局与关键建模细节；"
-                "时间和光线应根据本次拍摄需求自行判断补充。标签："
-                f"{json.dumps(scene.effective_tags, ensure_ascii=False)}"
+                "时间和光线应根据本次拍摄需求自行判断补充。"
             )
         else:
             base = self.prompts.render("scene_fallback_prompt", scene_hint=hint)
@@ -1625,24 +1597,6 @@ def _prompt_summary(value: str, limit: int = 120) -> str:
 
 def _optional_bool(value: Any, default: bool) -> bool:
     return default if value is None else bool(value)
-
-
-def _person_identity_tags(tags: Mapping[str, Any] | None) -> dict[str, Any]:
-    result = dict(tags or {})
-    result.pop("accessories", None)
-    summary = str(result.get("appearance_summary") or "").strip()
-    if summary:
-        result["appearance_summary"] = summary
-    return result
-
-
-def _reference_label(asset: ReferenceAsset | None) -> dict[str, Any] | None:
-    if asset is None:
-        return None
-    tags = asset.effective_tags
-    if asset.category == ReferenceCategory.PERSON:
-        tags = _person_identity_tags(tags)
-    return {"id": asset.id, "name": asset.name, "tags": tags}
 
 
 def _mapping(value: Any) -> dict[str, Any]:

@@ -52,7 +52,6 @@ class PromptService:
             "person_prompt",
             "outfit_prompt",
             "scene_prompt",
-            "reference_labels",
             "negative_prompt",
             "person_style",
             "scene_hint",

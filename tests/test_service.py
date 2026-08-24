@@ -516,7 +516,9 @@ def test_auto_backfill_extracts_scene_when_scene_text_is_eligible(tmp_path: Path
         children = service.storage.list_tasks(parent_task_id=task.id)
         assert {child.result_metadata["asset_category"] for child in children} == {"outfit", "scene"}
         scenes = service.gallery.list_assets(category=ReferenceCategory.SCENE)
+        outfits = service.gallery.list_assets(category=ReferenceCategory.OUTFIT)
         assert len(scenes) == 1
+        assert len(outfits) == 1
         assert scenes[0].status == AssetStatus.ACTIVE
         assert scenes[0].tags == {
             "room_type": "bedroom",
@@ -528,6 +530,15 @@ def test_auto_backfill_extracts_scene_when_scene_text_is_eligible(tmp_path: Path
             child for child in children if child.result_metadata["asset_category"] == ReferenceCategory.SCENE.value
         )
         assert scene_child.result_metadata["asset_status"] == AssetStatus.ACTIVE.value
+        continuity = service.continuity.get(task.scope_key)
+        assert continuity is not None
+        assert continuity.outfit_id == outfits[0].id
+        assert continuity.scene_id == scenes[0].id
+        decision = service.continuity.decide(task.scope_key, "bedroom-window")
+        assert decision.outfit_id == outfits[0].id
+        assert decision.scene_id == scenes[0].id
+        assert decision.outfit_reason == "same_scene_same_day_within_ttl"
+        assert decision.scene_reason == "same_scene_same_day_within_ttl"
         scene_tag_call = ctx.llm.calls[-1]
         assert isinstance(scene_tag_call, list)
         assert '"privacy_eligible":false' in scene_tag_call[0]["content"][0]["text"]
@@ -600,6 +611,12 @@ def test_scene_photo_can_use_scene_reference_without_person(tmp_path: Path) -> N
         assert saved is not None
         assert saved.status == TaskStatus.SENT
         assert provider.calls[0][1]["images"] == [scene_bytes]
+        prompt = provider.calls[0][0]
+        assert "场景参考图仅用于还原空间结构、固定布局与关键建模细节" in prompt
+        assert scene_id not in prompt
+        assert "bedroom-window" not in prompt
+        assert "room_type" not in prompt
+        assert "confidence" not in prompt
         refs = {item.role: item for item in service.storage.list_task_references(task.id)}
         assert refs["person"].asset_id is None
         assert refs["outfit"].asset_id is None
@@ -670,6 +687,7 @@ def test_photo_reference_order_and_same_scene_outfit_continuity(tmp_path: Path) 
             description="在卧室窗边拍一张自然照片",
             outfit_hint="casual summer dress",
             scene_hint="卧室窗边",
+            accessory_hint="蓝色手提包",
         )
         assert await service.tasks.drain(timeout=3)
         assert ctx.llm.calls[1] == "CUSTOM SIGNATURE 卧室窗边"
@@ -686,6 +704,24 @@ def test_photo_reference_order_and_same_scene_outfit_continuity(tmp_path: Path) 
             outfit_bytes,
             scene_bytes,
         ]
+        prompt = provider.calls[0][0]
+        assert "严格保持人物参考图的面部与身份一致" in prompt
+        assert "服装完全由服装参考图控制" in prompt
+        assert "场景参考图仅用于还原空间结构、固定布局与关键建模细节" in prompt
+        assert "用户服装提示：casual summer dress" in prompt
+        assert "手持物或随身物件：蓝色手提包" in prompt
+        for excluded in (
+            person_id,
+            outfit_id,
+            scene_id,
+            "adult with dark hair",
+            "bedroom-window",
+            "confidence",
+            "appearance_summary",
+            "wearing_scenes",
+            "privacy_eligible",
+        ):
+            assert excluded not in prompt
         first_refs = {item.role: item for item in service.storage.list_task_references(first.id)}
         assert first_refs["person"].asset_id == person_id
         assert first_refs["person"].selection_source == "singleton"
