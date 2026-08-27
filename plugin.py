@@ -467,8 +467,6 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             # a tool RPC does not and cannot authenticate its caller here.
             if not isinstance(kwargs.get("message"), Mapping):
                 raise PermissionError("图库管理请由管理员使用 /maitu 命令")
-            if not self.config.references.planner_gallery_management_enabled:
-                raise PermissionError("当前配置已关闭 Planner 参考图库管理；请由管理员使用 /maitu 命令管理参考图库")
             invocation = invocation_context(kwargs)
             self._require_admin(invocation)
             return await self._manage_reference(

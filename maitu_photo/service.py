@@ -1476,7 +1476,7 @@ class PhotoStudioService:
 
     def _person_prompt(self, person: ReferenceAsset | None, *, nickname: str = "", personality: str = "") -> str:
         if person is not None:
-            return "严格保持人物参考图的面部与身份一致，不要根据人物参考图推断或复制服装。"
+            return self.config.prompts.person_reference_prompt.strip()
         return self.prompts.render(
             "person_fallback_prompt",
             person_prompt=self.config.prompts.person_prompt,
@@ -1486,7 +1486,7 @@ class PhotoStudioService:
 
     def _outfit_prompt(self, outfit: ReferenceAsset | None, hint: str, accessory_hint: str = "") -> str:
         if outfit is not None:
-            base = "服装完全由服装参考图控制，不要使用人物参考图中的衣服。"
+            base = self.config.prompts.outfit_reference_prompt.strip()
         else:
             base = self.config.prompts.clothing_style_prompt
         extras: list[str] = []
@@ -1498,10 +1498,7 @@ class PhotoStudioService:
 
     def _scene_prompt(self, scene: ReferenceAsset | None, hint: str) -> str:
         if scene is not None:
-            base = (
-                "场景参考图仅用于还原空间结构、固定布局与关键建模细节；"
-                "时间和光线应根据本次拍摄需求自行判断补充。"
-            )
+            base = self.config.prompts.scene_reference_prompt.strip()
         else:
             base = self.prompts.render("scene_fallback_prompt", scene_hint=hint)
         return base or hint
@@ -1521,7 +1518,13 @@ class PhotoStudioService:
         selected = {
             "image": self.config.prompts.scene_photo_system + self.config.prompts.scene_photo_user,
             "scene_photo": self.config.prompts.scene_photo_system + self.config.prompts.scene_photo_user,
-            "photo": self.config.prompts.photo_system + self.config.prompts.photo_user,
+            "photo": (
+                self.config.prompts.photo_system
+                + self.config.prompts.photo_user
+                + self.config.prompts.person_reference_prompt
+                + self.config.prompts.outfit_reference_prompt
+                + self.config.prompts.scene_reference_prompt
+            ),
         }.get(kind, kind)
         digest = hashlib.sha256(selected.encode("utf-8")).hexdigest()[:16]
         return f"{self.config.plugin.config_version}:{kind}:{digest}"

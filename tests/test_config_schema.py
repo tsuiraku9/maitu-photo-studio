@@ -25,21 +25,58 @@ _CHINESE_TEXT = re.compile(r"[\u4e00-\u9fff]")
 
 def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     config = PhotoPluginConfig()
-    assert config.plugin.config_version == "1.4.0"
+    assert config.plugin.config_version == "1.5.0"
     assert config.references.require_person_reference is True
+    assert not hasattr(config.references, "planner_gallery_management_enabled")
     schema = generate_plugin_config_schema(PhotoPluginConfig)
     fields = [field for section in schema["sections"].values() for field in section["fields"].values()]
 
-    assert len(fields) == 101
+    assert len(fields) == 103
     for field in fields:
         assert _CHINESE_TEXT.search(field["label"]), field["name"]
         assert _CHINESE_TEXT.search(field["description"]), field["name"]
         assert _CHINESE_TEXT.search(field["hint"]), field["name"]
+        assert "没有运行时占位符" not in field["hint"], field["name"]
+        assert "3×2" not in field["hint"] and "3x2" not in field["hint"].casefold(), field["name"]
+        assert "2×2" not in field["hint"] and "2x2" not in field["hint"].casefold(), field["name"]
     prompt_fields = schema["sections"]["prompts"]["fields"]
     assert "{description}" in prompt_fields["scene_photo_user"]["hint"]
     assert "{person_prompt}" in prompt_fields["photo_user"]["hint"]
     assert "generate_scene_photo" in prompt_fields["generate_scene_photo_brief"]["hint"]
     assert prompt_fields["generate_scene_photo_brief"]["ui_type"] == "textarea"
+    assert "3×2" in config.prompts.extract_person
+    assert "2×2" in config.prompts.extract_outfit
+    openai_fields = schema["sections"]["openai"]["fields"]
+    assert "images_json" in openai_fields["generation_mode"]["hint"]
+    assert "chat_completions" in openai_fields["generation_mode"]["hint"]
+    assert "不会改用其他方式" in openai_fields["generation_mode"]["hint"]
+
+
+def test_legacy_planner_gallery_flag_is_dropped() -> None:
+    config = PhotoPluginConfig.model_validate({"references": {"planner_gallery_management_enabled": True}})
+
+    assert not hasattr(config.references, "planner_gallery_management_enabled")
+
+
+def test_reference_constraint_prompts_are_editable() -> None:
+    config = PhotoPluginConfig()
+
+    assert "面部与身份" in config.prompts.person_reference_prompt
+    assert "服装参考图" in config.prompts.outfit_reference_prompt
+    assert "空间结构" in config.prompts.scene_reference_prompt
+
+    custom = PhotoPluginConfig.model_validate(
+        {
+            "prompts": {
+                "person_reference_prompt": "自定义人物约束",
+                "outfit_reference_prompt": "自定义服装约束",
+                "scene_reference_prompt": "自定义场景约束",
+            }
+        }
+    )
+    assert custom.prompts.person_reference_prompt == "自定义人物约束"
+    assert custom.prompts.outfit_reference_prompt == "自定义服装约束"
+    assert custom.prompts.scene_reference_prompt == "自定义场景约束"
 
 
 def test_default_scene_tag_prompt_requests_privacy_eligibility() -> None:

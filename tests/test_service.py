@@ -146,6 +146,20 @@ def _scene_photo_llm_replies(signature: str = "generic-scene") -> list[dict]:
     ]
 
 
+def test_reference_constraint_prompts_come_from_config(tmp_path: Path) -> None:
+    config = _config()
+    config.prompts.person_reference_prompt = "CUSTOM_PERSON"
+    config.prompts.outfit_reference_prompt = "CUSTOM_OUTFIT"
+    config.prompts.scene_reference_prompt = "CUSTOM_SCENE"
+    service = PhotoStudioService(_Context([]), config, tmp_path)
+    present = object()
+
+    assert service._person_prompt(present) == "CUSTOM_PERSON"  # type: ignore[arg-type]
+    assert service._outfit_prompt(present, "", "") == "CUSTOM_OUTFIT"  # type: ignore[arg-type]
+    assert service._scene_prompt(present, "") == "CUSTOM_SCENE"  # type: ignore[arg-type]
+    asyncio.run(service.close())
+
+
 def test_task_lookup_rejects_same_group_on_another_canonical_stream(tmp_path: Path) -> None:
     service = PhotoStudioService(_Context([]), _config(), tmp_path)
     first = _invocation(stream_id="qq-stream", group_id="same-group")
@@ -453,9 +467,7 @@ def test_auto_backfill_skips_scene_extraction_when_scene_text_is_ineligible(tmp_
         assert children[0].result_metadata["asset_category"] == ReferenceCategory.OUTFIT.value
         assert all(asset.category != ReferenceCategory.SCENE for asset in service.gallery.list_assets())
         text_eligibility_calls = [
-            call
-            for call in ctx.llm.calls
-            if isinstance(call, str) and "判断目标场景是否属于" in call
+            call for call in ctx.llm.calls if isinstance(call, str) and "判断目标场景是否属于" in call
         ]
         assert len(text_eligibility_calls) == 1
         assert not any(
@@ -468,10 +480,7 @@ def test_auto_backfill_skips_scene_extraction_when_scene_text_is_ineligible(tmp_
                 and "判断目标场景是否属于" in str(item.get("text") or "")
                 for item in call[0].get("content", [])
             )
-            and any(
-                isinstance(item, dict) and item.get("type") == "image_url"
-                for item in call[0].get("content", [])
-            )
+            and any(isinstance(item, dict) and item.get("type") == "image_url" for item in call[0].get("content", []))
             for call in ctx.llm.calls
         )
         await service.close()
@@ -544,9 +553,7 @@ def test_auto_backfill_extracts_scene_when_scene_text_is_eligible(tmp_path: Path
         assert '"privacy_eligible":false' in scene_tag_call[0]["content"][0]["text"]
         assert "光线" in service._scene_prompt(scenes[0], "")
         text_eligibility_calls = [
-            call
-            for call in ctx.llm.calls
-            if isinstance(call, str) and "判断目标场景是否属于" in call
+            call for call in ctx.llm.calls if isinstance(call, str) and "判断目标场景是否属于" in call
         ]
         assert len(text_eligibility_calls) == 1
         assert not any(
@@ -559,10 +566,7 @@ def test_auto_backfill_extracts_scene_when_scene_text_is_eligible(tmp_path: Path
                 and "判断目标场景是否属于" in str(item.get("text") or "")
                 for item in call[0].get("content", [])
             )
-            and any(
-                isinstance(item, dict) and item.get("type") == "image_url"
-                for item in call[0].get("content", [])
-            )
+            and any(isinstance(item, dict) and item.get("type") == "image_url" for item in call[0].get("content", []))
             for call in ctx.llm.calls
         )
         await service.close()

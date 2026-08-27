@@ -288,6 +288,155 @@ def test_chat_completions_sends_ordered_multimodal_content_and_parses_markdown()
     assert [item["type"] for item in content] == ["text", "image_url", "image_url"]
     assert base64.b64decode(content[1]["image_url"]["url"].split(",", 1)[1]) == references[0]
     assert base64.b64decode(content[2]["image_url"]["url"].split(",", 1)[1]) == references[1]
+    assert payload["modalities"] == ["text", "image"]
+
+
+def test_images_json_sends_data_url_references_without_multipart() -> None:
+    first = _png("red")
+    second = _png("blue")
+    output = _png("green")
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["content_type"] = request.headers.get("content-type")
+        seen["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(output).decode()}]},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                mode="images_json",
+                generation_model="grok-imagine-image-2.0",
+                client=client,
+            )
+            return await provider.edit_image("compose", [first, second])
+
+    result = _run(scenario())
+
+    assert result.data == output
+    assert seen["url"] == "https://api.example.test/v1/images/edits"
+    assert str(seen["content_type"]).startswith("application/json")
+    payload = seen["payload"]
+    assert isinstance(payload, dict)
+    assert payload["model"] == "grok-imagine-image-2.0"
+    assert payload["prompt"] == "compose"
+    assert "response_format" not in payload
+    refs = payload["images"]
+    assert isinstance(refs, list)
+    assert len(refs) == 2
+    assert base64.b64decode(refs[0]["url"].split(",", 1)[1]) == first
+    assert base64.b64decode(refs[1]["url"].split(",", 1)[1]) == second
+
+
+def test_images_api_keeps_multipart_even_for_grok_model_names() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["content_type"] = request.headers.get("content-type")
+        seen["url"] = str(request.url)
+        return httpx.Response(
+            200,
+            json={"data": [{"b64_json": base64.b64encode(_png("green")).decode()}]},
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                mode="images_api",
+                generation_model="grok-imagine-image-2.0",
+                client=client,
+            )
+            return await provider.edit_image("keep identity", [_png("red")])
+
+    _run(scenario())
+
+    assert seen["url"] == "https://api.example.test/v1/images/edits"
+    assert str(seen["content_type"]).startswith("multipart/form-data")
+
+
+def test_images_api_does_not_switch_mode_after_unsupported_media_type() -> None:
+    paths: list[str] = []
+    content_types: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        content_types.append(request.headers.get("content-type") or "")
+        return httpx.Response(415, text="Expected application/json", request=request)
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                mode="images_api",
+                generation_model="grok-imagine-image-2.0",
+                max_retries=2,
+                retry_backoff_seconds=0,
+                client=client,
+            )
+            return await provider.edit_image("compose", [_png("red")])
+
+    with pytest.raises(ProviderHTTPError) as caught:
+        _run(scenario())
+
+    assert caught.value.status_code == 415
+    assert caught.value.retryable is False
+    assert paths == ["/v1/images/edits"]
+    assert content_types[0].startswith("multipart/form-data")
+
+
+def test_chat_completions_parses_gemini_inline_data_response() -> None:
+    output = _png("green")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["modalities"] == ["text", "image"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "generated",
+                            "images": [
+                                {
+                                    "inline_data": {
+                                        "mime_type": "image/png",
+                                        "data": base64.b64encode(output).decode(),
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                ]
+            },
+            request=request,
+        )
+
+    async def scenario():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            provider = OpenAICompatibleProvider(
+                "https://api.example.test",
+                "test-key-value",
+                mode="chat_completions",
+                generation_model="gemini-3.1-flash-image",
+                client=client,
+            )
+            return await provider.generate("a sunset")
+
+    result = _run(scenario())
+    assert result.data == output
+    assert result.media_type == "image/png"
 
 
 def test_remote_url_result_is_downloaded_without_forwarding_provider_secret(

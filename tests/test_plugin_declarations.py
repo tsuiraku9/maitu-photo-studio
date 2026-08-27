@@ -58,42 +58,16 @@ def test_components_can_be_discovered_before_config_injection() -> None:
     }
 
 
-def test_gallery_tool_stays_hidden_when_legacy_planner_management_flag_is_enabled() -> None:
-    config = PhotoPluginConfig()
-    config.references.planner_gallery_management_enabled = True
+def test_gallery_tool_is_never_registered_for_planner() -> None:
     plugin = MaiTuPhotoPlugin()
-    _inject_config(plugin, config)
+    _inject_config(plugin, PhotoPluginConfig())
 
     assert "manage_reference_gallery" not in {item["name"] for item in plugin.get_components()}
 
 
-def test_gallery_tool_rejects_calls_when_planner_management_is_disabled() -> None:
-    config = PhotoPluginConfig()
-    plugin = MaiTuPhotoPlugin()
-    _inject_config(plugin, config)
-    message = {
-        "message_id": "m1",
-        "session_id": "s1",
-        "platform": "qq",
-        "message_info": {"user_info": {"user_id": "ordinary"}},
-    }
-
-    result = asyncio.run(
-        plugin.handle_manage_reference_gallery(
-            operation="list",
-            stream_id="s1",
-            message=message,
-        )
-    )
-
-    assert result["success"] is False
-    assert "关闭 Planner" in result["error"]
-
-
-def test_gallery_tool_rejects_non_admin_when_planner_management_is_enabled() -> None:
+def test_gallery_handler_rejects_non_admin_command_invocation() -> None:
     config = PhotoPluginConfig()
     config.plugin.admin_user_ids = ["qq:admin"]
-    config.references.planner_gallery_management_enabled = True
     plugin = MaiTuPhotoPlugin()
     _inject_config(plugin, config)
     message = {
@@ -115,10 +89,9 @@ def test_gallery_tool_rejects_non_admin_when_planner_management_is_enabled() -> 
     assert "管理员" in result["error"]
 
 
-def test_gallery_tool_allows_admin_when_planner_management_is_enabled() -> None:
+def test_gallery_handler_allows_admin_command_invocation() -> None:
     config = PhotoPluginConfig()
     config.plugin.admin_user_ids = ["qq:admin"]
-    config.references.planner_gallery_management_enabled = True
     plugin = MaiTuPhotoPlugin()
     _inject_config(plugin, config)
     message = {
@@ -146,7 +119,6 @@ def test_gallery_tool_allows_admin_when_planner_management_is_enabled() -> None:
 def test_gallery_tool_rejects_action_rpc_even_with_spoofed_admin_fields() -> None:
     config = PhotoPluginConfig()
     config.plugin.admin_user_ids = ["qq:admin"]
-    config.references.planner_gallery_management_enabled = True
     plugin = MaiTuPhotoPlugin()
     _inject_config(plugin, config)
 

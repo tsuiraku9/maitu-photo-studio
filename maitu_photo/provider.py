@@ -1,11 +1,13 @@
 """OpenAI-compatible image generation provider.
 
 Only one transport mode is attempted for a request.  ``images_api`` uses the
-standard ``/images/generations`` and ``/images/edits`` endpoints;
-``chat_completions`` sends a multimodal prompt to ``/chat/completions``.  A
-caller can choose either mode per request, but this module deliberately never
-falls back to another mode after an error (which could otherwise double-charge
-an image request).
+standard ``/images/generations`` JSON endpoint and multipart ``/images/edits``;
+``images_json`` uses the same Images endpoints but sends reference images as
+JSON (needed by Grok Imagine and similar gateways that reject multipart with
+HTTP 415); ``chat_completions`` sends a multimodal prompt to
+``/chat/completions``.  A caller chooses the mode explicitly.  This module
+never falls back to another mode after an error (which could otherwise
+double-charge an image request).
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ DEFAULT_MAX_RETRIES = 0
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
 MAX_RETRIES = 5
 MAX_RETRY_BACKOFF_SECONDS = 60.0
-SUPPORTED_MODES = frozenset({"images_api", "chat_completions"})
+SUPPORTED_MODES = frozenset({"images_api", "images_json", "chat_completions"})
 _IMAGE_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _BLOCKED_IMAGE_HOSTNAMES = frozenset({"localhost", "localhost.localdomain", "metadata.google.internal"})
 
@@ -250,9 +252,7 @@ class ProviderConfig:
         if not isinstance(self.retry_backoff_seconds, (int, float)) or isinstance(self.retry_backoff_seconds, bool):
             raise ProviderConfigError("retry_backoff_seconds must be a number")
         if not 0 <= self.retry_backoff_seconds <= MAX_RETRY_BACKOFF_SECONDS:
-            raise ProviderConfigError(
-                f"retry_backoff_seconds must be between 0 and {MAX_RETRY_BACKOFF_SECONDS}"
-            )
+            raise ProviderConfigError(f"retry_backoff_seconds must be between 0 and {MAX_RETRY_BACKOFF_SECONDS}")
 
 
 @dataclass(frozen=True)
@@ -502,6 +502,10 @@ class OpenAICompatibleProvider:
             "images": "images_api",
             "image_api": "images_api",
             "image": "images_api",
+            "images_json": "images_json",
+            "images-json": "images_json",
+            "image_json": "images_json",
+            "json_edits": "images_json",
             "chat": "chat_completions",
             "chat_completion": "chat_completions",
             "chat-completion": "chat_completions",
@@ -782,6 +786,31 @@ class OpenAICompatibleProvider:
                             )
                         )
                         return
+                # Gemini native and some OpenAI-compatible gateways wrap image
+                # bytes as inline_data / inlineData with raw base64.
+                for key in ("inline_data", "inlineData"):
+                    child = value.get(key)
+                    if not isinstance(child, Mapping):
+                        continue
+                    encoded = child.get("data")
+                    if not isinstance(encoded, str) or not encoded.strip():
+                        continue
+                    media = str(child.get("mime_type") or child.get("mimeType") or "")
+                    parsed = _decode_data_url(encoded)
+                    if parsed:
+                        data, parsed_media = parsed
+                        media = parsed_media or media
+                    else:
+                        data = _decode_b64(encoded)
+                    results.append(
+                        GeneratedImage(
+                            data=data,
+                            media_type=_media_type_for_bytes(data, fallback=media or "image/png"),
+                            index=len(results),
+                            raw=value,
+                        )
+                    )
+                    return
                 # Explicit URL-bearing fields may contain a direct remote URL.
                 for key in ("url", "image_url", "image", "image_data"):
                     if key in value:
@@ -864,9 +893,10 @@ class OpenAICompatibleProvider:
 
         for attempt in range(self.max_retries + 1):
             try:
-                if selected_mode == "images_api":
+                if selected_mode in {"images_api", "images_json"}:
                     if materialized_refs:
-                        response = await self._images_edit(
+                        edit = self._images_edit_json if selected_mode == "images_json" else self._images_edit
+                        response = await edit(
                             prompt,
                             materialized_refs,
                             model=selected_model,
@@ -902,7 +932,7 @@ class OpenAICompatibleProvider:
                     raise
                 retry_number = attempt + 1
                 delay = min(
-                    self.retry_backoff_seconds * (2 ** attempt),
+                    self.retry_backoff_seconds * (2**attempt),
                     MAX_RETRY_BACKOFF_SECONDS,
                 )
                 self.logger.warning(
@@ -998,6 +1028,48 @@ class OpenAICompatibleProvider:
             fields.update(dict(extra))
         return await self._post_multipart(self.endpoint("images/edits"), data=fields, files=files)
 
+    async def _images_edit_json(
+        self,
+        prompt: str,
+        images: Sequence[ImageInput],
+        *,
+        model: str,
+        size: str | None,
+        negative_prompt: str | None,
+        n: int,
+        response_format: str | None,
+        extra: Mapping[str, Any] | None,
+    ) -> httpx.Response:
+        """POST ``/images/edits`` as JSON with data-URL reference images.
+
+        Some compatible gateways (including Grok Imagine) reject OpenAI-style
+        multipart edits with HTTP 415 and require ``application/json`` instead.
+        ``response_format`` is omitted unless the caller puts it in ``extra``.
+        """
+
+        if not images:
+            raise ProviderConfigError("at least one reference image is required for edits")
+        refs: list[dict[str, str]] = []
+        for image in images:
+            data, media, _ = _coerce_input_bytes(image)
+            encoded = base64.b64encode(data).decode("ascii")
+            refs.append({"url": f"data:{media};base64,{encoded}", "type": "image_url"})
+        payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": n}
+        if len(refs) == 1:
+            payload["image"] = refs[0]
+        else:
+            payload["images"] = refs
+        if size:
+            payload["size"] = size
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        if extra:
+            payload.update(dict(extra))
+        # OpenAI's response_format is omitted unless the caller set it in extra.
+        # xAI-style JSON edits treat unknown fields as errors on some gateways.
+        _ = response_format
+        return await self._post_json(self.endpoint("images/edits"), payload)
+
     async def _chat_generate(
         self,
         prompt: str,
@@ -1031,6 +1103,10 @@ class OpenAICompatibleProvider:
             payload["size"] = size
         if extra:
             payload.update(dict(extra))
+        # This mode is used to generate images, not text-only chat.  Gemini
+        # image models and compatible gateways require an explicit image
+        # output modality; callers can override it through ``extra``.
+        payload.setdefault("modalities", ["text", "image"])
         return await self._post_json(self.endpoint("chat/completions"), payload)
 
 

@@ -37,9 +37,7 @@ def _prompt_ui(label: str, purpose: str, placeholders: str = "", **extra: Any) -
 
     parts = [purpose.strip()]
     if placeholders.strip():
-        parts.append(f"运行时会替换这些占位符：{placeholders.strip()}。")
-    else:
-        parts.append("这段文本没有运行时占位符，请按字面编写。")
+        parts.append(f"占位符：{placeholders.strip()}")
     rows = extra.pop("rows", 6)
     extra.setdefault("x-widget", "textarea")
     return _ui(label, " ".join(parts), rows=rows, **extra)
@@ -48,11 +46,16 @@ def _prompt_ui(label: str, purpose: str, placeholders: str = "", **extra: Any) -
 def _tool_text_ui(label: str, purpose: str, *, rows: int = 4) -> dict[str, Any]:
     """Build textarea metadata for Planner-facing tool text."""
 
-    return _ui(
-        label,
-        f"{purpose.strip()} 这段文本没有运行时占位符；修改后需要重载插件。",
-        **{"x-widget": "textarea", "rows": rows},
-    )
+    return _ui(label, purpose.strip(), **{"x-widget": "textarea", "rows": rows})
+
+
+RequestMode = Literal["images_api", "images_json", "chat_completions"]
+_REQUEST_MODE_HINT = (
+    "按服务商选择，失败后不会改用其他方式。"
+    "images_api：OpenAI Images，参考图用 multipart。"
+    "images_json：参考图用 JSON（Grok Imagine 等）。"
+    "chat_completions：多模态聊天生图（Gemini 等）。"
+)
 
 
 _LEGACY_BROKEN_TAG_SCENE_PROMPT = (
@@ -74,14 +77,14 @@ class PluginSection(PluginConfigBase):
     __ui_label__ = "插件与权限"
     __ui_icon__ = "photo_camera"
     config_version: str = Field(
-        default="1.4.0",
+        default="1.5.0",
         description="插件配置版本",
         json_schema_extra=_ui("配置版本", "用于配置迁移，请勿手动修改。"),
     )
     enabled: bool = Field(
         default=True,
         description="是否启用插件",
-        json_schema_extra=_ui("启用插件", "关闭后插件不会接受新的生图或图库管理任务。"),
+        json_schema_extra=_ui("启用插件", "关闭后不再接受新的生图或图库任务。"),
     )
     command_prefix: str = Field(
         default="/maitu",
@@ -93,7 +96,7 @@ class PluginSection(PluginConfigBase):
         description="允许管理图库的用户 ID",
         json_schema_extra=_ui(
             "管理员用户 ID",
-            "填写 platform:user_id（例如 qq:123456）；旧版宿主未提供 platform 时才使用裸 ID。每项填写一个 ID。",
+            "每项填写 platform:user_id，例如 qq:123456。",
         ),
     )
 
@@ -111,39 +114,35 @@ class OpenAISection(PluginConfigBase):
         default="",
         description="接口 Base URL，可带或不带 /v1",
         json_schema_extra=_ui(
-            "OpenAI 接口地址", "OpenAI 兼容服务的 Base URL，可带或不带 /v1。", placeholder="https://api.example.com/v1"
+            "接口地址", "OpenAI 兼容服务的 Base URL，可带或不带 /v1。", placeholder="https://api.example.com/v1"
         ),
     )
     api_key: str = Field(
         default="",
         description="API Key（诊断与日志不会输出）",
         json_schema_extra=_ui(
-            "API 密钥", "用于调用生图服务；诊断和日志不会输出此值。", **{"x-widget": "password"}, placeholder="sk-..."
+            "API 密钥", "调用生图服务；日志不会输出此值。", **{"x-widget": "password"}, placeholder="sk-..."
         ),
     )
     generation_model: str = Field(
         default="gpt-image-2",
         description="默认生图模型",
-        json_schema_extra=_ui(
-            "默认生图模型", "含人物写真与无人物环境照片默认使用的模型 ID。", placeholder="gpt-image-2"
-        ),
+        json_schema_extra=_ui("生图模型", "写真和环境照使用的模型 ID。", placeholder="gpt-image-2"),
     )
     reference_model: str = Field(
         default="gpt-image-2",
         description="参考图提取模型",
-        json_schema_extra=_ui(
-            "参考图处理模型", "从上传图或生成结果提取多角度参考板时使用的模型 ID。", placeholder="gpt-image-2"
-        ),
+        json_schema_extra=_ui("参考图模型", "提取人物、服装、场景参考板使用的模型 ID。", placeholder="gpt-image-2"),
     )
-    generation_mode: Literal["images_api", "chat_completions"] = Field(
+    generation_mode: RequestMode = Field(
         default="images_api",
-        description="照片生图模式",
-        json_schema_extra=_ui("照片生图接口模式", "images_api 使用 Images API；chat_completions 使用多模态聊天接口。"),
+        description="照片生图请求方式",
+        json_schema_extra=_ui("生图请求方式", _REQUEST_MODE_HINT),
     )
-    reference_mode: Literal["images_api", "chat_completions"] = Field(
+    reference_mode: RequestMode = Field(
         default="images_api",
-        description="参考图提取模式",
-        json_schema_extra=_ui("参考图处理接口模式", "多参考图编辑和参考板提取所使用的接口模式。"),
+        description="参考图提取请求方式",
+        json_schema_extra=_ui("参考图请求方式", _REQUEST_MODE_HINT),
     )
     request_timeout_seconds: float = Field(
         default=180.0,
@@ -153,29 +152,23 @@ class OpenAISection(PluginConfigBase):
     connect_timeout_seconds: float = Field(
         default=15.0,
         description="HTTP 建连超时（秒）",
-        json_schema_extra=_ui("连接超时（秒）", "连接 OpenAI 兼容服务的最长等待时间。"),
+        json_schema_extra=_ui("连接超时（秒）", "连接生图服务的最长等待时间。"),
     )
     max_response_bytes: int = Field(
         default=32 * 1024 * 1024,
         description="允许下载的单张结果上限",
-        json_schema_extra=_ui("响应图片上限（字节）", "拒绝下载超过此大小的单张模型结果，防止异常响应占用过多内存。"),
+        json_schema_extra=_ui("响应图片上限（字节）", "超过此大小的单张结果会被拒绝下载。"),
     )
 
     generation_max_retries: int = Field(
         default=0,
         description="生图失败后的最大重试次数",
-        json_schema_extra=_ui(
-            "生图最大重试次数",
-            "仅对可重试的网络错误、HTTP 429 和 5xx 生效；首次请求不计入此次数。默认 0 可避免重复计费。",
-        ),
+        json_schema_extra=_ui("生图重试次数", "仅网络错误、429、5xx 会重试；默认 0，避免重复计费。"),
     )
     generation_retry_backoff_seconds: float = Field(
         default=1.0,
         description="生图重试之间的基础等待时间（秒）",
-        json_schema_extra=_ui(
-            "生图重试等待时间（秒）",
-            "重试采用指数退避，实际等待时间逐次翻倍并限制在 60 秒以内；设为 0 可在测试或本地服务中立即重试。",
-        ),
+        json_schema_extra=_ui("重试等待（秒）", "指数退避的基础等待时间，上限 60 秒。"),
     )
 
     @model_validator(mode="after")
@@ -202,25 +195,22 @@ class ModelTaskSection(PluginConfigBase):
     tagging_task_name: str = Field(
         default="vlm",
         description="自动标签使用的 MaiBot 模型任务名",
-        json_schema_extra=_ui("自动标签模型任务", "MaiBot 模型配置中用于识图和生成结构化标签的任务名。"),
+        json_schema_extra=_ui("自动标签模型", "MaiBot 里用于识图打标的任务名。"),
     )
     selection_task_name: str = Field(
         default="utils",
         description="图库选择使用的 MaiBot 模型任务名",
-        json_schema_extra=_ui("图库选择模型任务", "MaiBot 模型配置中用于场景判断和候选参考图选择的任务名。"),
+        json_schema_extra=_ui("图库选择模型", "MaiBot 里用于场景判断和挑选参考图的任务名。"),
     )
     max_tokens: int = Field(
         default=6400,
         description="辅助模型最大输出 token 数",
-        json_schema_extra=_ui(
-            "辅助模型最大输出 Token 数",
-            "自动标签、场景判断和图库选择共用的输出上限；设得过低可能截断 JSON，设得过高会增加延迟与模型开销。",
-        ),
+        json_schema_extra=_ui("最大输出 Token", "标签、场景判断和图库选择共用的输出上限。"),
     )
     temperature: float = Field(
         default=0.1,
         description="辅助模型温度",
-        json_schema_extra=_ui("模型温度", "辅助模型采样温度；较低值可提高结构化 JSON 的稳定性。"),
+        json_schema_extra=_ui("模型温度", "较低值更利于稳定输出 JSON。"),
     )
 
 
@@ -232,71 +222,57 @@ class ReferenceSection(PluginConfigBase):
     person_reference_enabled: bool = Field(
         default=True,
         description="含人物写真任务是否优先使用全局人物参考图",
-        json_schema_extra=_ui(
-            "启用写真人物参考",
-            "开启后，有可用人物参考板时会作为第一张参考图。若同时开启「强制要求人物参考图」，"
-            "没有可用参考板会直接拒绝；否则自动使用 MaiBot 人格设定生成文字人物描述。"
-            "关闭后默认使用人格文字描述；工具显式传 use_person_reference=true 时仍会尝试使用人物参考板。"
-            "不含人物的环境照片工具不受此项影响。",
-        ),
+        json_schema_extra=_ui("使用人物参考图", "开启后，有人物板时作为第一张参考图。"),
     )
     require_person_reference: bool = Field(
         default=True,
         description="是否禁止人物参考缺失时的人格文字回退",
-        json_schema_extra=_ui(
-            "强制要求人物参考图",
-            "默认开启，以保持人物外貌稳定并兼容旧版本。开启后，含人物写真没有可用人物参考板会直接拒绝；"
-            "关闭后会注入 MaiBot 人格设定作为人物回退。仅在任务通过配置或 use_person_reference 请求人物参考时生效。",
-        ),
+        json_schema_extra=_ui("强制人物参考图", "开启后没有人物板会拒绝任务；关闭则改用人格文字描述。"),
     )
     outfit_reference_enabled: bool = Field(
         default=True,
         description="默认使用服装参考图",
-        json_schema_extra=_ui("使用服装参考图", "写真任务默认从服装图库选择并传入参考板。"),
+        json_schema_extra=_ui("使用服装参考图", "写真默认从服装图库挑选参考板。"),
     )
     scene_reference_enabled: bool = Field(
         default=True,
         description="默认使用场景参考图",
-        json_schema_extra=_ui("使用场景参考图", "写真任务仅在合格的室内私密小空间中选择场景参考板。"),
-    )
-    planner_gallery_management_enabled: bool = Field(
-        default=False,
-        description="兼容旧配置保留；当前不允许 Planner 使用参考图库管理工具",
-        json_schema_extra=_ui(
-            "旧版 Planner 图库开关（停用）",
-            "为兼容旧配置保留。当前 MaiBot 工具调用无法向插件提供不可伪造的调用者身份，"
-            "因此无论此项取值如何都不会注册 manage_reference_gallery；"
-            "请由 plugin.admin_user_ids 中的管理员使用 /maitu 命令管理图库。",
-        ),
+        json_schema_extra=_ui("使用场景参考图", "仅在合格的室内私密小空间使用场景参考板。"),
     )
     auto_extract_missing: bool = Field(
         default=True,
         description="缺少参考图时是否自动从结果提取",
-        json_schema_extra=_ui(
-            "自动补充缺失参考图",
-            "照片使用文字回退后，从成功结果异步提取缺少的服装或场景参考板；场景先通过文字资格判断，随后立即创建补库任务。",
-        ),
+        json_schema_extra=_ui("自动补齐参考图", "写真成功后，从结果图异步提取本次缺少的服装或场景参考。"),
     )
     auto_enable_generated_references: bool = Field(
         default=True,
         description="生成成功后是否立即启用新参考图",
-        json_schema_extra=_ui("自动启用新参考图", "自动提取或管理员提取成功且标签有效时，立即允许新条目参与选择。"),
+        json_schema_extra=_ui("自动启用新参考图", "提取成功且标签有效时，立即允许新条目参与选择。"),
     )
     max_bytes: int = Field(
         default=480_000,
         description="参考图硬上限（字节，不得超过 500000）",
-        json_schema_extra=_ui("参考图大小上限（字节）", "所有入库图片压缩后的硬上限；配置值不得超过 500000。"),
+        json_schema_extra=_ui("参考图大小上限（字节）", "入库压缩后的硬上限，不得超过 500000。"),
     )
     max_edge: int = Field(
         default=2048,
         description="参考图最长边上限",
-        json_schema_extra=_ui("参考图最长边（像素）", "入库 JPEG 的宽和高中较长一边的最大像素数。"),
+        json_schema_extra=_ui("参考图最长边（像素）", "入库图片较长一边的最大像素数。"),
     )
     max_pixels: int = Field(
         default=40_000_000,
         description="解码时允许的最大像素数",
-        json_schema_extra=_ui("解码像素上限", "拒绝解码总像素数超过此值的上传图片，用于限制内存占用。"),
+        json_schema_extra=_ui("解码像素上限", "超过此总像素的上传图会拒绝解码。"),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_planner_gallery_flag(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        migrated = dict(data)
+        migrated.pop("planner_gallery_management_enabled", None)
+        return migrated
 
     def model_post_init(self, __context: Any) -> None:
         if not 1 <= self.max_bytes <= 500_000:
@@ -313,28 +289,22 @@ class ContinuitySection(PluginConfigBase):
     enabled: bool = Field(
         default=True,
         description="是否启用连续性选择",
-        json_schema_extra=_ui(
-            "启用参考图连续性",
-            "按群聊或私聊流记录最近写真；场景指纹未变化时，优先复用上次的服装和场景参考图。",
-        ),
+        json_schema_extra=_ui("启用连续性", "同一聊天、同一场景时优先复用上次的服装和场景参考。"),
     )
     ttl_hours: float = Field(
         default=12.0,
         description="场景未变化时复用参考图的有效时长",
-        json_schema_extra=_ui(
-            "参考图复用时长（小时）",
-            "距同一聊天范围上一张同场景照片不超过此时长时，优先复用上次的服装和场景参考图。",
-        ),
+        json_schema_extra=_ui("复用时长（小时）", "同场景照片在此时长内优先复用上次参考图。"),
     )
     same_local_day: bool = Field(
         default=True,
         description="是否要求处于同一自然日",
-        json_schema_extra=_ui("限制同一自然日", "启用后，即使未超过复用时长，跨自然日也会重新选择服装和场景参考图。"),
+        json_schema_extra=_ui("限制同一自然日", "跨自然日会重新选择服装和场景参考。"),
     )
     timezone: str = Field(
         default="Asia/Hong_Kong",
         description="连续性日期时区",
-        json_schema_extra=_ui("连续性时区", "判断自然日边界使用的 IANA 时区名称。", placeholder="Asia/Hong_Kong"),
+        json_schema_extra=_ui("时区", "判断自然日边界使用的 IANA 时区。", placeholder="Asia/Hong_Kong"),
     )
 
 
@@ -346,29 +316,27 @@ class TaskSection(PluginConfigBase):
     worker_count: int = Field(
         default=1,
         description="后台任务 worker 数量",
-        json_schema_extra=_ui("后台工作进程数", "并行处理生成和图库任务的 Worker 数量；提高后可能增加并发计费。"),
+        json_schema_extra=_ui("后台工作进程数", "并行处理生图和图库任务的数量；提高可能增加并发计费。"),
     )
     poll_interval_seconds: float = Field(
         default=0.5,
         description="队列轮询间隔",
-        json_schema_extra=_ui("队列轮询间隔（秒）", "后台 Worker 检查待处理任务的间隔。"),
+        json_schema_extra=_ui("队列轮询间隔（秒）", "后台检查待处理任务的间隔。"),
     )
     result_retention_hours: int = Field(
         default=24,
         description="生图结果文件保留时长",
-        json_schema_extra=_ui(
-            "结果文件保留时间（小时）", "图片完成投递且衍生参考图处理结束后，非图库结果文件的保留时间。"
-        ),
+        json_schema_extra=_ui("结果保留（小时）", "投递完成后，非图库结果文件的保留时间。"),
     )
     metadata_retention_days: int = Field(
         default=30,
         description="任务元数据保留时长",
-        json_schema_extra=_ui("任务记录保留时间（天）", "已结束图片任务及其摘要元数据在数据库中的保留天数。"),
+        json_schema_extra=_ui("任务记录保留（天）", "已结束任务元数据在数据库中的保留天数。"),
     )
     max_queue_size: int = Field(
         default=100,
         description="最大排队任务数",
-        json_schema_extra=_ui("最大排队任务数", "待处理任务达到此数量后拒绝继续提交，避免队列无限增长。"),
+        json_schema_extra=_ui("最大排队数", "待处理任务达到此数量后拒绝新提交。"),
     )
 
 
@@ -380,17 +348,17 @@ class OutputSection(PluginConfigBase):
     notify_planner: bool = Field(
         default=True,
         description="图片投递后是否唤起 Planner",
-        json_schema_extra=_ui("通知 Planner", "图片发送成功或失败后追加上下文并主动唤醒 Planner。"),
+        json_schema_extra=_ui("通知 Planner", "发送成功或失败后追加上下文并唤醒 Planner。"),
     )
     include_image_in_status: bool = Field(
         default=True,
         description="状态工具是否允许返回图片内容",
-        json_schema_extra=_ui("状态查询可返回图片", "允许状态工具通过 content_items 附带已生成图片供 Planner 观察。"),
+        json_schema_extra=_ui("状态可返回图片", "允许状态查询附带已生成图片供 Planner 观察。"),
     )
     notification_priority: str = Field(
         default="normal",
         description="Planner 主动任务优先级",
-        json_schema_extra=_ui("Planner 通知优先级", "传给 Maisaka 主动触发能力的优先级字符串。", placeholder="normal"),
+        json_schema_extra=_ui("通知优先级", "传给主动触发能力的优先级。", placeholder="normal"),
     )
 
 
@@ -402,19 +370,12 @@ class LoggingSection(PluginConfigBase):
     enabled: bool = Field(
         default=True,
         description="是否输出插件生命周期日志",
-        json_schema_extra=_ui(
-            "启用插件日志",
-            "输出任务入队、生成、投递、重试、通知和失败等诊断事件；日志不会包含 API 密钥、完整提示词或图片数据。",
-        ),
+        json_schema_extra=_ui("启用插件日志", "输出入队、生成、投递和失败等事件；不含密钥、完整提示词或图片。"),
     )
     minimum_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
         description="插件日志最低输出级别",
-        json_schema_extra=_ui(
-            "日志最低级别",
-            "DEBUG 会额外记录安全的流程细节；INFO 适合日常排查；WARNING 和 ERROR 仅保留异常事件。"
-            "最终是否显示还受 MaiBot 宿主日志级别影响。",
-        ),
+        json_schema_extra=_ui("日志最低级别", "日常用 INFO；DEBUG 更细，WARNING/ERROR 只留异常。"),
     )
 
 
@@ -429,20 +390,17 @@ class ToolDescriptionSection(PluginConfigBase):
     brief: str = Field(
         default="",
         description="工具简短描述",
-        json_schema_extra=_tool_text_ui("工具简短描述", "Planner 筛选工具时看到的简短用途。", rows=2),
+        json_schema_extra=_tool_text_ui("工具简介", "Planner 筛选工具时看到的一句话。", rows=2),
     )
     detailed: str = Field(
         default="",
         description="工具详细描述",
-        json_schema_extra=_tool_text_ui("工具详细描述", "Planner 决定如何调用工具时看到的完整说明。", rows=6),
+        json_schema_extra=_tool_text_ui("工具详细说明", "Planner 决定如何调用时看到的完整说明。", rows=6),
     )
     parameters: dict[str, str] = Field(
         default_factory=dict,
         description="参数描述映射",
-        json_schema_extra=_ui(
-            "工具参数描述",
-            "按参数名配置给 Planner 看的说明；键必须是工具参数名，例如 description、scene_hint。修改后需要重载插件。",
-        ),
+        json_schema_extra=_ui("工具参数说明", "按参数名写给 Planner 看的说明，例如 description、scene_hint。"),
     )
 
 
@@ -460,8 +418,8 @@ class PromptSection(PluginConfigBase):
         ),
         description="无人物环境照片系统提示词",
         json_schema_extra=_prompt_ui(
-            "无人物环境照片 · 系统提示词",
-            "不含 bot 本人的环境、景物或物品照片发送给生图模型的系统指令；人物、服装和人格不会注入此类任务。",
+            "环境照 · 系统提示词",
+            "不含 bot 本人的环境、景物或物品照发给生图模型的系统指令。",
         ),
     )
     scene_photo_user: str = Field(
@@ -472,11 +430,9 @@ class PromptSection(PluginConfigBase):
         ),
         description="无人物环境照片用户提示词",
         json_schema_extra=_prompt_ui(
-            "无人物环境照片 · 用户提示词",
-            "拼在系统提示词后面，发给生图模型。",
-            "{description} 规划器填写的完整拍摄需求；"
-            "{scene_prompt} 场景参考图约束或场景文字回退；"
-            "{negative_prompt} 下方「默认负面提示词」字段。",
+            "环境照 · 用户提示词",
+            "拼在系统提示词后发给生图模型。",
+            "{description}、{scene_prompt}、{negative_prompt}",
         ),
     )
     photo_system: str = Field(
@@ -488,8 +444,8 @@ class PromptSection(PluginConfigBase):
         ),
         description="含人物写真系统提示词",
         json_schema_extra=_prompt_ui(
-            "含人物写真 · 系统提示词",
-            "bot 本人出镜的写真任务发送给生图模型的系统指令。",
+            "写真 · 系统提示词",
+            "bot 本人出镜的写真发给生图模型的系统指令。",
         ),
     )
     photo_user: str = Field(
@@ -500,13 +456,9 @@ class PromptSection(PluginConfigBase):
         ),
         description="含人物写真用户提示词",
         json_schema_extra=_prompt_ui(
-            "含人物写真 · 用户提示词",
-            "拼在系统提示词后面，发给生图模型。",
-            "{description} 规划器填写的完整拍摄需求；"
-            "{person_prompt} 人物参考图约束，或注入 MaiBot 人格设定的「人物文字回退模板」渲染结果；"
-            "{outfit_prompt} 服装参考图约束或「服装文字回退提示词」；"
-            "{scene_prompt} 场景参考图约束或「场景文字回退模板」；"
-            "{negative_prompt} 下方「默认负面提示词」字段。",
+            "写真 · 用户提示词",
+            "拼在系统提示词后发给生图模型。",
+            "{description}、{person_prompt}、{outfit_prompt}、{scene_prompt}、{negative_prompt}",
         ),
     )
 
@@ -526,7 +478,7 @@ class PromptSection(PluginConfigBase):
         description="默认负面提示词",
         json_schema_extra=_prompt_ui(
             "默认负面提示词",
-            "未另外指定时追加到所有照片任务；会填入用户提示词里的 {negative_prompt}。",
+            "追加到所有照片任务，填入用户提示词的 {negative_prompt}。",
         ),
     )
     person_prompt: str = Field(
@@ -536,9 +488,8 @@ class PromptSection(PluginConfigBase):
         ),
         description="无人物参考图时的基础人物描述",
         json_schema_extra=_prompt_ui(
-            "无参考人物的基础描述",
-            "没有人物参考板时使用的基础外貌约束；会与 MaiBot 昵称和人格设定一起填入「人物文字回退模板」。不要写服装。"
-            "会填入 {person_prompt}。",
+            "无人物参考 · 基础外貌",
+            "没有人物板时的基础外貌约束，不要写服装。",
         ),
     )
     person_fallback_prompt: str = Field(
@@ -548,27 +499,54 @@ class PromptSection(PluginConfigBase):
         ),
         description="无人物参考图时的人格人物提示词模板",
         json_schema_extra=_prompt_ui(
-            "无参考人物的人格回退模板",
-            "未传入人物参考板时渲染，结果写入写真用户提示词的 {person_prompt}；人格文本来自 MaiBot 主配置。",
-            "{nickname} MaiBot 昵称；{personality} MaiBot 人格设定；{person_prompt} 上方基础人物描述。",
+            "无人物参考 · 回退模板",
+            "没有人物板时渲染，结果写入 {person_prompt}。",
+            "{nickname}、{personality}、{person_prompt}",
             rows=5,
+        ),
+    )
+    person_reference_prompt: str = Field(
+        default="严格保持人物参考图的面部与身份一致，不要根据人物参考图推断或复制服装。",
+        description="有人物参考图时写入 {person_prompt} 的约束",
+        json_schema_extra=_prompt_ui(
+            "有人物参考时的约束",
+            "有人物板时写入写真用户提示词的 {person_prompt}。",
+            rows=3,
         ),
     )
     clothing_style_prompt: str = Field(
         default="自然合身的日常服装，符合本次地点、季节、活动与人格气质；材质、剪裁和褶皱真实",
         description="无服装参考图时的服装风格提示词",
         json_schema_extra=_prompt_ui(
-            "服装文字回退提示词",
-            "没有合适服装参考板时写入写真用户提示词的 {outfit_prompt}。",
+            "无服装参考 · 文字回退",
+            "没有服装板时写入 {outfit_prompt}。",
+        ),
+    )
+    outfit_reference_prompt: str = Field(
+        default="服装完全由服装参考图控制，不要使用人物参考图中的衣服。",
+        description="有服装参考图时写入 {outfit_prompt} 的约束",
+        json_schema_extra=_prompt_ui(
+            "有服装参考时的约束",
+            "有服装板时写入写真用户提示词的 {outfit_prompt}。",
+            rows=3,
         ),
     )
     scene_fallback_prompt: str = Field(
         default="按本次拍摄需求还原地点、时间、光线、天气、固定布局与生活氛围：{scene_hint}",
         description="无场景参考图时的场景提示词",
         json_schema_extra=_prompt_ui(
-            "场景文字回退模板",
-            "没有合适场景参考板时渲染，结果写入用户提示词的 {scene_prompt}。",
-            "{scene_hint} 规划器传入的场景/地点提示。",
+            "无场景参考 · 回退模板",
+            "没有场景板时渲染，结果写入 {scene_prompt}。",
+            "{scene_hint}",
+            rows=3,
+        ),
+    )
+    scene_reference_prompt: str = Field(
+        default=("场景参考图仅用于还原空间结构、固定布局与关键建模细节；时间和光线应根据本次拍摄需求自行判断补充。"),
+        description="有场景参考图时写入 {scene_prompt} 的约束",
+        json_schema_extra=_prompt_ui(
+            "有场景参考时的约束",
+            "有场景板时写入用户提示词的 {scene_prompt}。",
             rows=3,
         ),
     )
@@ -583,8 +561,8 @@ class PromptSection(PluginConfigBase):
         ),
         description="人物参考提取提示词",
         json_schema_extra=_prompt_ui(
-            "人物参考板提取提示词",
-            "将管理员上传的人物图整理为聚焦面部的 3×2 身份参考板；不要保留服装。",
+            "人物参考提取提示词",
+            "把上传的人物图整理成身份参考板，不要保留服装。",
         ),
     )
     generate_person_from_personality: str = Field(
@@ -597,11 +575,9 @@ class PromptSection(PluginConfigBase):
         ),
         description="按人格设定生成人物参考板提示词",
         json_schema_extra=_prompt_ui(
-            "按人格生成人物参考板提示词",
-            "没有人物参考图时，根据 MaiBot 人格设定无原图生成面部身份参考板。",
-            "{nickname} MaiBot 机器人昵称；"
-            "{personality} MaiBot 人格设定全文；"
-            "{appearance_hint} 管理员可选的不含服装的外貌补充。",
+            "按人格生成人物参考",
+            "没有人物图时，按 MaiBot 人格生成身份参考板。",
+            "{nickname}、{personality}、{appearance_hint}",
         ),
     )
     extract_outfit: str = Field(
@@ -611,16 +587,16 @@ class PromptSection(PluginConfigBase):
         ),
         description="服装参考提取提示词",
         json_schema_extra=_prompt_ui(
-            "服装参考板提取提示词",
-            "从原图提取同一套服装并生成 2×2 多角度参考板。",
+            "服装参考提取提示词",
+            "从原图提取同一套服装，生成多角度参考板。",
         ),
     )
     extract_scene: str = Field(
         default="从输入照片中提取空场景参考图，生成 2×2 参考板：广角、多视角和平面图。",
         description="场景参考提取提示词",
         json_schema_extra=_prompt_ui(
-            "场景参考板提取提示词",
-            "从原图移除人物并生成含平面图的 2×2 私密场景参考板。",
+            "场景参考提取提示词",
+            "从原图移除人物，生成私密场景参考板。",
         ),
     )
     tag_person: str = Field(
@@ -634,8 +610,8 @@ class PromptSection(PluginConfigBase):
         ),
         description="人物标签提示词",
         json_schema_extra=_prompt_ui(
-            "人物自动标签提示词",
-            "视觉模型分析人物参考板时使用；只描述面部与身份，不要写服装。必须仅返回约定 Schema 的 JSON。",
+            "人物自动标签",
+            "分析人物参考板；只描述面部与身份，仅返回约定 JSON。",
         ),
     )
     tag_outfit: str = Field(
@@ -646,16 +622,16 @@ class PromptSection(PluginConfigBase):
         ),
         description="服装标签提示词",
         json_schema_extra=_prompt_ui(
-            "服装自动标签提示词",
-            "视觉模型提取类型、穿着场景、季节和风格标签时使用。",
+            "服装自动标签",
+            "从服装参考板提取类型、场景、季节和风格。",
         ),
     )
     tag_scene: str = Field(
         default=_DEFAULT_TAG_SCENE_PROMPT,
         description="场景标签提示词",
         json_schema_extra=_prompt_ui(
-            "场景自动标签提示词",
-            "视觉模型提取房间类型、私密空间资格和稳定场景指纹时使用；时间与光线由每次生图任务自行判断。",
+            "场景自动标签",
+            "提取房间类型、私密资格和场景指纹；时间与光线由每次生图自行判断。",
         ),
     )
     scene_eligibility: str = Field(
@@ -667,9 +643,9 @@ class PromptSection(PluginConfigBase):
         ),
         description="目标场景文字资格与场景指纹判断提示词",
         json_schema_extra=_prompt_ui(
-            "场景资格判断提示词",
-            "根据场景文字描述约束哪些地点可使用或入库场景参考图；资格通过后自动创建补库任务。",
-            "{scene_hint} 规划器传入的场景/地点提示；{description} 规划器填写的完整拍摄需求。",
+            "场景资格判断",
+            "根据文字判断该地点能否使用或入库场景参考。",
+            "{scene_hint}、{description}",
         ),
     )
     select_references: str = Field(
@@ -684,8 +660,8 @@ class PromptSection(PluginConfigBase):
         description="参考图选择提示词",
         json_schema_extra=_prompt_ui(
             "图库选择提示词",
-            "辅助模型从候选元数据选择服装和场景。",
-            "{description} 规划器填写的完整拍摄需求；{candidate_json} 候选参考图元数据 JSON，不含图片字节。",
+            "从候选元数据里挑选服装和场景。",
+            "{description}、{candidate_json}",
         ),
     )
     scene_signature: str = Field(
@@ -699,8 +675,8 @@ class PromptSection(PluginConfigBase):
         description="场景变化判断提示词",
         json_schema_extra=_prompt_ui(
             "场景指纹提示词",
-            "将场景描述归一化，供连续性判断复用。",
-            "{scene_hint} 规划器传入的场景/地点提示；若为空则回退为完整拍摄需求。",
+            "把场景描述归一化，供连续性判断复用。",
+            "{scene_hint}",
         ),
     )
     planner_success: str = Field(
@@ -710,9 +686,9 @@ class PromptSection(PluginConfigBase):
         ),
         description="成功投递后的 Planner 意图",
         json_schema_extra=_prompt_ui(
-            "成功投递通知提示词",
-            "图片确认发送后唤醒 Planner 使用。",
-            "{task_id} 本次图片任务 ID。",
+            "成功投递通知",
+            "图片发送成功后唤醒 Planner。",
+            "{task_id}",
             rows=3,
         ),
     )
@@ -720,9 +696,9 @@ class PromptSection(PluginConfigBase):
         default="图片生成任务 {task_id} 未能成功发送：{error}。请根据上下文向用户自然说明，不要假装图片已经发送。",
         description="投递失败后的 Planner 意图",
         json_schema_extra=_prompt_ui(
-            "失败投递通知提示词",
-            "生成或发送失败后唤醒 Planner 使用。",
-            "{task_id} 本次图片任务 ID；{error} 对用户安全的失败摘要。",
+            "失败投递通知",
+            "生成或发送失败后唤醒 Planner。",
+            "{task_id}、{error}",
             rows=3,
         ),
     )
@@ -731,8 +707,8 @@ class PromptSection(PluginConfigBase):
         default="生成一张不含 bot 本人的手机真实环境/景物/物品照片",
         description="无人物环境照片工具简短描述",
         json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 简短描述",
-            "对应工具 generate_scene_photo。Planner 筛选工具时看到的一句话。",
+            "环境照 · 简介",
+            "Planner 筛选 generate_scene_photo 时看到的一句话。",
             rows=2,
         ),
     )
@@ -745,80 +721,52 @@ class PromptSection(PluginConfigBase):
         ),
         description="无人物环境照片工具详细描述",
         json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 详细描述",
-            "对应工具 generate_scene_photo。Planner 决定如何调用时看到的完整说明。",
+            "环境照 · 详细说明",
+            "Planner 调用 generate_scene_photo 时看到的完整说明。",
         ),
     )
     generate_scene_photo_description: str = Field(
         default="完整拍摄需求：主体、环境、光线、构图、氛围；画面不得出现 bot 本人",
         description="无人物环境照片工具 description 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 参数 description",
-            "对应工具参数 description，没有运行时占位符。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("环境照 · description", "拍摄需求参数。", rows=2),
     )
     generate_scene_photo_scene_hint: str = Field(
         default="场景/地点提示，用于选择或文字描述场景",
         description="无人物环境照片工具 scene_hint 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 参数 scene_hint",
-            "对应工具参数 scene_hint。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("环境照 · scene_hint", "场景或地点提示。", rows=2),
     )
     generate_scene_photo_scene_id: str = Field(
         default="明确指定的场景参考 ID；无效或分类错误会直接失败",
         description="无人物环境照片工具 scene_id 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 参数 scene_id",
-            "对应工具参数 scene_id。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("环境照 · scene_id", "指定场景参考 ID。", rows=2),
     )
     generate_scene_photo_use_scene_reference: str = Field(
         default="是否尝试使用场景参考图；省略时使用配置默认值",
         description="无人物环境照片工具 use_scene_reference 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 参数 use_scene_reference",
-            "对应工具参数 use_scene_reference。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("环境照 · use_scene_reference", "是否使用场景参考图。", rows=2),
     )
     generate_scene_photo_force_new_scene: str = Field(
         default="忽略连续性缓存，重新判断/选择场景",
         description="无人物环境照片工具 force_new_scene 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 参数 force_new_scene",
-            "对应工具参数 force_new_scene。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("环境照 · force_new_scene", "忽略连续性，重新选择场景。", rows=2),
     )
     generate_scene_photo_size: str = Field(
         default="服务商支持的图片尺寸，留空用默认",
         description="无人物环境照片工具 size 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 参数 size",
-            "对应工具参数 size。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("环境照 · size", "图片尺寸，留空用默认。", rows=2),
     )
     generate_scene_photo_model_id: str = Field(
         default="临时覆盖生成模型，留空用插件配置",
         description="无人物环境照片工具 model_id 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "无人物环境照片工具 · 参数 model_id",
-            "对应工具参数 model_id。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("环境照 · model_id", "临时覆盖生图模型。", rows=2),
     )
 
     generate_photo_brief: str = Field(
         default="生成一张 bot 本人出镜的手机真实生活照片，并尽量保持服装与场景连续",
         description="含人物写真工具简短描述",
         json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 简短描述",
-            "对应工具 generate_photo。Planner 筛选工具时看到的一句话。",
+            "写真 · 简介",
+            "Planner 筛选 generate_photo 时看到的一句话。",
             rows=2,
         ),
     )
@@ -834,217 +782,127 @@ class PromptSection(PluginConfigBase):
         ),
         description="含人物写真工具详细描述",
         json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 详细描述",
-            "对应工具 generate_photo。Planner 决定如何调用时看到的完整说明。",
+            "写真 · 详细说明",
+            "Planner 调用 generate_photo 时看到的完整说明。",
         ),
     )
     generate_photo_description: str = Field(
         default="完整拍摄需求：动作、表情、构图、光线、氛围和画面中要发生的事",
         description="含人物写真工具 description 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 description",
-            "对应工具参数 description。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · description", "拍摄需求参数。", rows=2),
     )
     generate_photo_outfit_hint: str = Field(
         default="服装类型、颜色、季节、风格或穿着场合",
         description="含人物写真工具 outfit_hint 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 outfit_hint",
-            "对应工具参数 outfit_hint。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · outfit_hint", "服装类型、颜色或风格提示。", rows=2),
     )
     generate_photo_scene_hint: str = Field(
         default="地点与场景；仅卧室/浴室/客厅等私密小空间才会使用场景参考",
         description="含人物写真工具 scene_hint 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 scene_hint",
-            "对应工具参数 scene_hint。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · scene_hint", "地点与场景提示。", rows=2),
     )
     generate_photo_accessory_hint: str = Field(
         default="发饰、眼镜、包、手持物等配饰",
         description="含人物写真工具 accessory_hint 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 accessory_hint",
-            "对应工具参数 accessory_hint。只描述手持物或随身物件，不要写服装。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · accessory_hint", "手持物或随身物件，不要写服装。", rows=2),
     )
     generate_photo_outfit_id: str = Field(
         default="明确指定的服装参考 ID；无效会直接失败",
         description="含人物写真工具 outfit_id 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 outfit_id",
-            "对应工具参数 outfit_id。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · outfit_id", "指定服装参考 ID。", rows=2),
     )
     generate_photo_scene_id: str = Field(
         default="明确指定的场景参考 ID；无效会直接失败",
         description="含人物写真工具 scene_id 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 scene_id",
-            "对应工具参数 scene_id。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · scene_id", "指定场景参考 ID。", rows=2),
     )
     generate_photo_use_person_reference: str = Field(
         default="是否使用人物参考；人物参考配置开启时只能省略或 true，传 false 会拒绝",
         description="含人物写真工具 use_person_reference 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 use_person_reference",
-            "对应工具参数 use_person_reference。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · use_person_reference", "是否使用人物参考图。", rows=2),
     )
     generate_photo_use_outfit_reference: str = Field(
         default="是否使用服装参考；省略时用配置默认值",
         description="含人物写真工具 use_outfit_reference 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 use_outfit_reference",
-            "对应工具参数 use_outfit_reference。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · use_outfit_reference", "是否使用服装参考图。", rows=2),
     )
     generate_photo_use_scene_reference: str = Field(
         default="是否使用场景参考；省略时用配置默认值",
         description="含人物写真工具 use_scene_reference 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 use_scene_reference",
-            "对应工具参数 use_scene_reference。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · use_scene_reference", "是否使用场景参考图。", rows=2),
     )
     generate_photo_force_new_outfit: str = Field(
         default="忽略本聊天服装连续性，强制重选服装",
         description="含人物写真工具 force_new_outfit 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 force_new_outfit",
-            "对应工具参数 force_new_outfit。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · force_new_outfit", "忽略连续性，强制重选服装。", rows=2),
     )
     generate_photo_force_new_scene: str = Field(
         default="忽略场景连续性，强制重选场景",
         description="含人物写真工具 force_new_scene 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 force_new_scene",
-            "对应工具参数 force_new_scene。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · force_new_scene", "忽略连续性，强制重选场景。", rows=2),
     )
     generate_photo_size: str = Field(
         default="服务商支持的图片尺寸",
         description="含人物写真工具 size 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 size",
-            "对应工具参数 size。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · size", "图片尺寸。", rows=2),
     )
     generate_photo_model_id: str = Field(
         default="临时覆盖生成模型",
         description="含人物写真工具 model_id 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "含人物写真工具 · 参数 model_id",
-            "对应工具参数 model_id。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("写真 · model_id", "临时覆盖生图模型。", rows=2),
     )
 
     gallery_brief: str = Field(
         default="管理员查询或维护人物、服装和场景参考图库",
         description="图库管理工具简短描述",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 简短描述",
-            "对应工具 manage_reference_gallery。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · 简介", "管理员维护参考图库时的简介。", rows=2),
     )
     gallery_detailed: str = Field(
         default="仅插件管理员可用。提取、导入、重标和重生成操作会创建后台任务；删除需要五分钟有效的确认令牌。",
         description="图库管理工具详细描述",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 详细描述",
-            "对应工具 manage_reference_gallery。",
-            rows=4,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · 详细说明", "图库管理工具的完整说明。", rows=4),
     )
     gallery_operation: str = Field(
         default="list、show、extract、import、edit、retag、regenerate、enable、disable 或 delete",
         description="图库管理工具 operation 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 参数 operation",
-            "对应工具参数 operation。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · operation", "图库操作类型。", rows=2),
     )
     gallery_category: str = Field(
         default="person、outfit 或 scene",
         description="图库管理工具 category 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 参数 category",
-            "对应工具参数 category。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · category", "参考图分类。", rows=2),
     )
     gallery_asset_id: str = Field(
         default="参考图 ID",
         description="图库管理工具 asset_id 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 参数 asset_id",
-            "对应工具参数 asset_id。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · asset_id", "参考图 ID。", rows=2),
     )
     gallery_name: str = Field(
         default="参考图名称",
         description="图库管理工具 name 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 参数 name",
-            "对应工具参数 name。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · name", "参考图名称。", rows=2),
     )
     gallery_tags: str = Field(
         default="人工标签覆盖对象",
         description="图库管理工具 tags 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 参数 tags",
-            "对应工具参数 tags。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · tags", "人工标签覆盖。", rows=2),
     )
     gallery_source_message_id: str = Field(
         default="包含唯一一张图片的当前或引用消息 ID",
         description="图库管理工具 source_message_id 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 参数 source_message_id",
-            "对应工具参数 source_message_id。管理员命令不依赖此参数。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · source_message_id", "来源图片消息 ID。", rows=2),
     )
     gallery_confirm_token: str = Field(
         default="危险操作的二次确认令牌",
         description="图库管理工具 confirm_token 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "图库管理工具 · 参数 confirm_token",
-            "对应工具参数 confirm_token。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("图库 · confirm_token", "危险操作的确认令牌。", rows=2),
     )
 
     status_brief: str = Field(
         default="查询当前聊天的图片任务状态",
         description="任务状态工具简短描述",
         json_schema_extra=_tool_text_ui(
-            "任务状态工具 · 简短描述",
-            "对应工具 get_image_task_status。",
-            rows=2,
+            "状态查询 · 简介", "Planner 筛选 get_image_task_status 时看到的一句话。", rows=2
         ),
     )
     status_detailed: str = Field(
@@ -1053,28 +911,18 @@ class PromptSection(PluginConfigBase):
         ),
         description="任务状态工具详细描述",
         json_schema_extra=_tool_text_ui(
-            "任务状态工具 · 详细描述",
-            "对应工具 get_image_task_status。",
-            rows=4,
+            "状态查询 · 详细说明", "Planner 调用 get_image_task_status 时看到的完整说明。", rows=4
         ),
     )
     status_task_id: str = Field(
         default="任务 ID；留空查询当前聊天最近任务",
         description="任务状态工具 task_id 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "任务状态工具 · 参数 task_id",
-            "对应工具参数 task_id。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("状态查询 · task_id", "任务 ID；留空查当前聊天最近任务。", rows=2),
     )
     status_include_image: str = Field(
         default="是否在 content_items 中附带已生成图片",
         description="任务状态工具 include_image 参数说明",
-        json_schema_extra=_tool_text_ui(
-            "任务状态工具 · 参数 include_image",
-            "对应工具参数 include_image。",
-            rows=2,
-        ),
+        json_schema_extra=_tool_text_ui("状态查询 · include_image", "是否附带已生成图片。", rows=2),
     )
 
     @model_validator(mode="before")
