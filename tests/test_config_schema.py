@@ -52,6 +52,21 @@ def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     assert "不会改用其他方式" in openai_fields["generation_mode"]["hint"]
     assert openai_fields["generation_extra_params"]["ui_type"] == "json"
 
+    expected_choices = {
+        "generation_quality": ["auto", "low", "medium", "high", "xhigh", "max", "standard", "hd"],
+        "generation_output_format": ["png", "jpeg", "webp"],
+        "generation_moderation": ["auto", "low"],
+        "reference_quality": ["auto", "low", "medium", "high", "xhigh", "max", "standard", "hd"],
+        "reference_output_format": ["png", "jpeg", "webp"],
+        "reference_moderation": ["auto", "low"],
+    }
+    for field_name, choices in expected_choices.items():
+        field = openai_fields[field_name]
+        assert field["ui_type"] == "select"
+        assert field["default"] == ""
+        assert field["choices"] == choices
+        assert "" not in field["choices"]
+
 
 def test_image_request_options_have_compatible_defaults_and_separate_values() -> None:
     config = PhotoPluginConfig()
@@ -133,6 +148,33 @@ def test_legacy_openai_config_without_image_options_keeps_empty_defaults() -> No
     assert config.openai.generation_model == "legacy-image-model"
     assert config.openai.generation_size == ""
     assert config.openai.reference_extra_params == {}
+
+    persisted_empty = PhotoPluginConfig.model_validate(
+        {
+            "openai": {
+                "generation_quality": "",
+                "generation_output_format": "",
+                "generation_moderation": "",
+                "reference_quality": "",
+                "reference_output_format": "",
+                "reference_moderation": "",
+            }
+        }
+    )
+    assert persisted_empty.openai.generation_quality == ""
+    assert persisted_empty.openai.generation_output_format == ""
+    assert persisted_empty.openai.generation_moderation == ""
+    assert persisted_empty.openai.reference_quality == ""
+    assert persisted_empty.openai.reference_output_format == ""
+    assert persisted_empty.openai.reference_moderation == ""
+
+    # Plugin config models validate assignments. Updating an unrelated field
+    # must not drop the optional Select-backed defaults from the model.
+    persisted_empty.openai.base_url = "https://provider.example"
+    assert persisted_empty.openai.generation_quality == ""
+    assert persisted_empty.openai.reference_moderation == ""
+    assert "generation_quality" in persisted_empty.openai.model_dump()
+    assert "reference_moderation" in persisted_empty.openai.model_dump()
 
 
 def test_legacy_planner_gallery_flag_is_dropped() -> None:

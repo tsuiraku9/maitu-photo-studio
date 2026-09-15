@@ -52,9 +52,9 @@ def _tool_text_ui(label: str, purpose: str, *, rows: int = 4) -> dict[str, Any]:
 
 
 RequestMode = Literal["images_api", "images_json", "chat_completions"]
-ImageQuality = Literal["", "auto", "low", "medium", "high", "xhigh", "max", "standard", "hd"]
-ImageOutputFormat = Literal["", "png", "jpeg", "webp"]
-ImageModeration = Literal["", "auto", "low"]
+ImageQuality = Literal["auto", "low", "medium", "high", "xhigh", "max", "standard", "hd"]
+ImageOutputFormat = Literal["png", "jpeg", "webp"]
+ImageModeration = Literal["auto", "low"]
 _REQUEST_MODE_HINT = (
     "按服务商选择，失败后不会改用其他方式。"
     "images_api：OpenAI Images，参考图用 multipart。"
@@ -259,6 +259,21 @@ class OpenAISection(PluginConfigBase):
         description="生图重试之间的基础等待时间（秒）",
         json_schema_extra=_ui("重试等待（秒）", "指数退避的基础等待时间，上限 60 秒。"),
     )
+
+    @field_validator(
+        "generation_quality",
+        "generation_output_format",
+        "generation_moderation",
+        "reference_quality",
+        "reference_output_format",
+        "reference_moderation",
+        mode="wrap",
+    )
+    @classmethod
+    def _preserve_empty_optional_image_options(cls, value: Any, handler: Any) -> Any:
+        """Accept the persisted empty sentinel without exposing it as a Select choice."""
+
+        return "" if value == "" else handler(value)
 
     @model_validator(mode="after")
     def _validate_generation_retry_settings(self) -> "OpenAISection":
