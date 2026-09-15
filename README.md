@@ -86,6 +86,12 @@
 
 `generation_extra_params` 和 `reference_extra_params` 是 JSON 对象，只能补充请求体字段。为防止绕过插件管理，不能包含 `model`、`prompt`、`n`、`size`、`quality`、`output_format`、`moderation`、`response_format`、`negative_prompt`、`image`、`images` 或 `messages` 等字段。`images_api` 与 `images_json` 会发送 Images 专用参数；`chat_completions` 不发送质量、输出格式和审核强度，但仍保留既有的 `size` 与额外 JSON 透传。GPT Image 请求默认不再强制发送 `response_format=b64_json`，插件仍能解析服务商返回的 URL 或 base64 图片。
 
+### 辅助模型 RPC 与图库候选数量
+
+`model_tasks.rpc_timeout_seconds` 控制标签、场景判断和图库选择等 MaiBot 辅助模型调用的 `cap.call` RPC 超时，默认 30 秒。它与 `openai.request_timeout_seconds` 相互独立：前者等待 MaiBot 的 `llm.generate` 能力返回，后者等待插件直接请求 OpenAI 兼容生图服务。辅助模型响应较慢并出现 `[E_TIMEOUT] 请求 cap.call 超时` 时，可在 WebUI 中调高前者。
+
+`model_tasks.selection_candidate_limit_per_category` 控制每次图库选择分别传给辅助模型的服装和场景候选数量，默认每类 12 条；两类都需要选择时最多传入 24 条候选元数据。它不改变最终生图使用的参考图数量和顺序，人物、服装、场景仍各最多一张，并保持人物 → 服装 → 场景。
+
 ## 安装
 
 将仓库放入 MaiBot 第三方插件目录，保留下面的结构：

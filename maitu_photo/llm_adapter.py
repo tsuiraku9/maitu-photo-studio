@@ -39,9 +39,18 @@ def parse_json_response(result: Any) -> dict[str, Any]:
 class MaiBotLLMAdapter:
     """Adapter that works with the SDK proxy and a test-friendly callable."""
 
-    def __init__(self, ctx: Any = None, generate: Callable[..., Awaitable[Any]] | None = None) -> None:
+    def __init__(
+        self,
+        ctx: Any = None,
+        generate: Callable[..., Awaitable[Any]] | None = None,
+        *,
+        rpc_timeout_seconds: float = 30.0,
+    ) -> None:
+        if isinstance(rpc_timeout_seconds, bool) or rpc_timeout_seconds <= 0:
+            raise ValueError("rpc_timeout_seconds must be positive")
         self.ctx = ctx
         self._generate = generate
+        self._rpc_timeout_ms = max(1, round(rpc_timeout_seconds * 1000))
 
     async def generate_text(
         self,
@@ -57,6 +66,7 @@ class MaiBotLLMAdapter:
                 model=task_name,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout_ms=self._rpc_timeout_ms,
             )
         if self.ctx is None:
             raise LLMAdapterError("MaiBot LLM 上下文尚未注入")
@@ -65,6 +75,7 @@ class MaiBotLLMAdapter:
             model=task_name,
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout_ms=self._rpc_timeout_ms,
         )
 
     async def generate_json(

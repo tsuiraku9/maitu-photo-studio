@@ -8,6 +8,7 @@ the active values in the plugin-local ``config.toml``.
 from __future__ import annotations
 
 import json
+import math
 import re
 import string
 from typing import Any, Literal
@@ -100,7 +101,7 @@ class PluginSection(PluginConfigBase):
     __ui_label__ = "插件与权限"
     __ui_icon__ = "photo_camera"
     config_version: str = Field(
-        default="1.6.0",
+        default="1.7.0",
         description="插件配置版本",
         json_schema_extra=_ui("配置版本", "用于配置迁移，请勿手动修改。"),
     )
@@ -336,6 +337,43 @@ class ModelTaskSection(PluginConfigBase):
         description="辅助模型温度",
         json_schema_extra=_ui("模型温度", "较低值更利于稳定输出 JSON。"),
     )
+    rpc_timeout_seconds: float = Field(
+        default=30.0,
+        description="辅助模型 cap.call RPC 超时（秒）",
+        json_schema_extra=_ui(
+            "辅助模型 RPC 超时（秒）",
+            "标签、场景判断和图库选择调用等待 MaiBot 辅助模型返回的最长时间；与生图接口超时相互独立。",
+        ),
+    )
+    selection_candidate_limit_per_category: int = Field(
+        default=12,
+        description="每类参考图选择候选上限",
+        json_schema_extra=_ui(
+            "每类选择候选数量",
+            "每次图库选择分别传给辅助模型的服装和场景候选上限；两类都参与时总数最多为此值的两倍。",
+        ),
+    )
+
+    @field_validator("rpc_timeout_seconds", "selection_candidate_limit_per_category", mode="before")
+    @classmethod
+    def _reject_boolean_limits(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("辅助模型超时和候选数量不能使用布尔值")
+        return value
+
+    @field_validator("rpc_timeout_seconds")
+    @classmethod
+    def _validate_rpc_timeout(cls, value: float) -> float:
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError("辅助模型 RPC 超时必须大于 0 秒")
+        return value
+
+    @field_validator("selection_candidate_limit_per_category")
+    @classmethod
+    def _validate_selection_candidate_limit(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("每类参考图选择候选数量必须大于 0")
+        return value
 
 
 class ReferenceSection(PluginConfigBase):

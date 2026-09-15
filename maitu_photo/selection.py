@@ -208,7 +208,8 @@ class ReferenceSelector:
         )
         scene_candidates.sort(key=lambda item: (-self._score(item, scene_hint), item.use_count, item.id))
 
-        candidates = outfit_candidates[:12] + scene_candidates[:12]
+        candidate_limit = int(self._config_value("selection_candidate_limit_per_category", 12))
+        candidates = outfit_candidates[:candidate_limit] + scene_candidates[:candidate_limit]
         selected_outfit_is_null = False
         if candidates and (outfit is None or scene is None):
             payload = json.dumps([item.as_selection_metadata() for item in candidates], ensure_ascii=False)

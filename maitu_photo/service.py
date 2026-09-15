@@ -145,7 +145,10 @@ class PhotoStudioService:
             same_local_day=config.continuity.same_local_day,
         )
         self.prompts = PromptService(config.prompts)
-        self.llm = MaiBotLLMAdapter(ctx)
+        self.llm = MaiBotLLMAdapter(
+            ctx,
+            rpc_timeout_seconds=config.model_tasks.rpc_timeout_seconds,
+        )
         self.log = PluginEventLogger(
             getattr(ctx, "logger", None),
             enabled=config.logging.enabled,

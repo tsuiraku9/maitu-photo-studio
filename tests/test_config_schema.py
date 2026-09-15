@@ -25,13 +25,15 @@ _CHINESE_TEXT = re.compile(r"[\u4e00-\u9fff]")
 
 def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     config = PhotoPluginConfig()
-    assert config.plugin.config_version == "1.6.0"
+    assert config.plugin.config_version == "1.7.0"
+    assert config.model_tasks.rpc_timeout_seconds == 30.0
+    assert config.model_tasks.selection_candidate_limit_per_category == 12
     assert config.references.require_person_reference is True
     assert not hasattr(config.references, "planner_gallery_management_enabled")
     schema = generate_plugin_config_schema(PhotoPluginConfig)
     fields = [field for section in schema["sections"].values() for field in section["fields"].values()]
 
-    assert len(fields) == 113
+    assert len(fields) == 115
     for field in fields:
         assert _CHINESE_TEXT.search(field["label"]), field["name"]
         assert _CHINESE_TEXT.search(field["description"]), field["name"]
@@ -254,6 +256,24 @@ def test_generation_retry_settings_have_safe_defaults_and_bounds() -> None:
         PhotoPluginConfig.model_validate({"openai": {"generation_max_retries": True}})
     with pytest.raises(ValueError, match="不能使用布尔值"):
         PhotoPluginConfig.model_validate({"openai": {"generation_retry_backoff_seconds": False}})
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "message"),
+    [
+        ("rpc_timeout_seconds", 0, "RPC 超时必须大于 0"),
+        ("rpc_timeout_seconds", -1, "RPC 超时必须大于 0"),
+        ("rpc_timeout_seconds", float("inf"), "RPC 超时必须大于 0"),
+        ("rpc_timeout_seconds", float("nan"), "RPC 超时必须大于 0"),
+        ("selection_candidate_limit_per_category", 0, "候选数量必须大于 0"),
+        ("selection_candidate_limit_per_category", -1, "候选数量必须大于 0"),
+        ("rpc_timeout_seconds", True, "不能使用布尔值"),
+        ("selection_candidate_limit_per_category", False, "不能使用布尔值"),
+    ],
+)
+def test_model_task_rpc_timeout_and_candidate_limit_validation(field_name: str, value: object, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        PhotoPluginConfig.model_validate({"model_tasks": {field_name: value}})
 
 
 def test_legacy_broken_scene_tag_prompt_is_migrated() -> None:
