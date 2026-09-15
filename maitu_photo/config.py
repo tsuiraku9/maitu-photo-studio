@@ -7,6 +7,8 @@ the active values in the plugin-local ``config.toml``.
 
 from __future__ import annotations
 
+import json
+import re
 import string
 from typing import Any, Literal
 
@@ -50,11 +52,32 @@ def _tool_text_ui(label: str, purpose: str, *, rows: int = 4) -> dict[str, Any]:
 
 
 RequestMode = Literal["images_api", "images_json", "chat_completions"]
+ImageQuality = Literal["", "auto", "low", "medium", "high", "xhigh", "max", "standard", "hd"]
+ImageOutputFormat = Literal["", "png", "jpeg", "webp"]
+ImageModeration = Literal["", "auto", "low"]
 _REQUEST_MODE_HINT = (
     "按服务商选择，失败后不会改用其他方式。"
     "images_api：OpenAI Images，参考图用 multipart。"
     "images_json：参考图用 JSON（Grok Imagine 等）。"
     "chat_completions：多模态聊天生图（Gemini 等）。"
+)
+
+_IMAGE_SIZE_RE = re.compile(r"^[1-9]\d*x[1-9]\d*$")
+_RESERVED_IMAGE_EXTRA_PARAMS = frozenset(
+    {
+        "image",
+        "images",
+        "messages",
+        "model",
+        "moderation",
+        "n",
+        "negative_prompt",
+        "output_format",
+        "prompt",
+        "quality",
+        "response_format",
+        "size",
+    }
 )
 
 
@@ -77,7 +100,7 @@ class PluginSection(PluginConfigBase):
     __ui_label__ = "插件与权限"
     __ui_icon__ = "photo_camera"
     config_version: str = Field(
-        default="1.5.0",
+        default="1.6.0",
         description="插件配置版本",
         json_schema_extra=_ui("配置版本", "用于配置迁移，请勿手动修改。"),
     )
@@ -144,6 +167,72 @@ class OpenAISection(PluginConfigBase):
         description="参考图提取请求方式",
         json_schema_extra=_ui("参考图请求方式", _REQUEST_MODE_HINT),
     )
+    generation_size: str = Field(
+        default="",
+        description="写真和环境照的默认输出分辨率",
+        json_schema_extra=_ui(
+            "生图默认分辨率",
+            "写真和环境照使用；留空由服务商决定，工具 size 参数优先。支持 auto 或 WIDTHxHEIGHT。",
+            placeholder="1024x1024",
+        ),
+    )
+    generation_quality: ImageQuality = Field(
+        default="",
+        description="写真和环境照的默认生成质量",
+        json_schema_extra=_ui("生图默认质量", "留空由服务商决定；不同模型支持的质量档位可能不同。"),
+    )
+    generation_output_format: ImageOutputFormat = Field(
+        default="",
+        description="写真和环境照的默认输出格式",
+        json_schema_extra=_ui("生图默认输出格式", "留空由服务商决定；OpenAI Images 支持 png、jpeg 和 webp。"),
+    )
+    generation_moderation: ImageModeration = Field(
+        default="",
+        description="写真和环境照的内容审核强度",
+        json_schema_extra=_ui("生图审核强度", "留空由服务商决定；auto 为标准过滤，low 为较宽松过滤。"),
+    )
+    generation_extra_params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="写真和环境照请求的额外 JSON 参数",
+        json_schema_extra=_ui(
+            "生图额外参数",
+            "仅补充请求体字段，不能覆盖模型、提示词、分辨率、质量、输出格式等插件管理字段。",
+            example={"background": "opaque"},
+        ),
+    )
+    reference_size: str = Field(
+        default="",
+        description="人物、服装和场景参考板的默认输出分辨率",
+        json_schema_extra=_ui(
+            "参考板默认分辨率",
+            "参考板生图使用；留空由服务商决定，管理员命令 size 参数优先。支持 auto 或 WIDTHxHEIGHT。",
+            placeholder="1024x1024",
+        ),
+    )
+    reference_quality: ImageQuality = Field(
+        default="",
+        description="人物、服装和场景参考板的默认生成质量",
+        json_schema_extra=_ui("参考板默认质量", "留空由服务商决定；不同模型支持的质量档位可能不同。"),
+    )
+    reference_output_format: ImageOutputFormat = Field(
+        default="",
+        description="人物、服装和场景参考板的默认输出格式",
+        json_schema_extra=_ui("参考板默认输出格式", "留空由服务商决定；OpenAI Images 支持 png、jpeg 和 webp。"),
+    )
+    reference_moderation: ImageModeration = Field(
+        default="",
+        description="人物、服装和场景参考板的内容审核强度",
+        json_schema_extra=_ui("参考板审核强度", "留空由服务商决定；auto 为标准过滤，low 为较宽松过滤。"),
+    )
+    reference_extra_params: dict[str, Any] = Field(
+        default_factory=dict,
+        description="人物、服装和场景参考板请求的额外 JSON 参数",
+        json_schema_extra=_ui(
+            "参考板额外参数",
+            "仅补充请求体字段，不能覆盖模型、提示词、分辨率、质量、输出格式等插件管理字段。",
+            example={"background": "opaque"},
+        ),
+    )
     request_timeout_seconds: float = Field(
         default=180.0,
         description="单次 HTTP 请求超时（秒）",
@@ -178,6 +267,26 @@ class OpenAISection(PluginConfigBase):
         if not 0 <= self.generation_retry_backoff_seconds <= 60:
             raise ValueError("generation_retry_backoff_seconds 必须介于 0 和 60 秒之间")
         return self
+
+    @field_validator("generation_size", "reference_size")
+    @classmethod
+    def _validate_image_size(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized and normalized != "auto" and not _IMAGE_SIZE_RE.fullmatch(normalized):
+            raise ValueError("图片分辨率必须留空、使用 auto 或填写 WIDTHxHEIGHT")
+        return normalized
+
+    @field_validator("generation_extra_params", "reference_extra_params")
+    @classmethod
+    def _validate_image_extra_params(cls, value: dict[str, Any]) -> dict[str, Any]:
+        conflicts = sorted(key for key in value if key.strip().casefold() in _RESERVED_IMAGE_EXTRA_PARAMS)
+        if conflicts:
+            raise ValueError(f"额外参数不能覆盖插件管理字段：{', '.join(conflicts)}")
+        try:
+            json.dumps(value, ensure_ascii=False, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("额外参数必须是可序列化的 JSON 对象") from exc
+        return dict(value)
 
     @field_validator("generation_max_retries", "generation_retry_backoff_seconds", mode="before")
     @classmethod

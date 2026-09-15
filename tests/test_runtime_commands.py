@@ -195,6 +195,10 @@ def test_command_parser_supports_quotes_options_and_json_tags() -> None:
     assert generated.action == "generate"
     assert generated.options["appearance_hint"] == "短发圆脸"
 
+    sized = parse_admin_command("/maitu 参考 提取 服装 分辨率=1024x1024")
+    assert sized.options["size"] == "1024x1024"
+    assert "分辨率=1024x1024" in help_text()
+
     approval = parse_admin_command("/maitu 参考 审核通过 abc")
     assert approval.domain == "ref"
     assert approval.action == "enable"

@@ -99,6 +99,8 @@ OPTION_ALIASES = {
     "确认令牌": "confirm_token",
     "appearance_hint": "appearance_hint",
     "补充": "appearance_hint",
+    "size": "size",
+    "分辨率": "size",
 }
 
 DOMAINS = frozenset(DOMAIN_ALIASES.values())
@@ -176,13 +178,13 @@ def help_text(prefix: str = "/maitu") -> str:
             f"{p} 帮助",
             f"{p} 诊断",
             f"{p} 人物 查看",
-            f"{p} 人物 提取    # 当前消息、引用消息或本聊天最近一张单图 → 面部参考板",
+            f"{p} 人物 提取 分辨率=1024x1024    # 当前/引用/最近单图；size 可覆盖参考板默认分辨率",
             f"{p} 人物 导入    # 直接导入已处理好的面部参考板",
             f"{p} 人物 生成    # 无人物参考时，按 MaiBot 人格设定生成面部参考板",
             f"{p} 人物 生成 补充=短发圆脸    # 可追加不含服装的外貌补充",
             f"{p} 人物 重生成",
             f"{p} 人物 清空    # 首次返回确认令牌，五分钟内带确认令牌再执行一次",
-            f"{p} 参考 提取 服装 名称=夏天裙子",
+            f"{p} 参考 提取 服装 名称=夏天裙子 分辨率=1024x1024",
             f"{p} 参考 导入 场景 名称=卧室",
             f"{p} 参考 列表",
             f"{p} 参考 列表 服装",

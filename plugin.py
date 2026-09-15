@@ -661,6 +661,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 category=ReferenceCategory.PERSON,
                 name=command.options.get("name", "人物参考"),
                 image=image,
+                size=command.options.get("size", ""),
             )
             return f"人物参考任务已排队：{task.id}"
         if command.action == "generate":
@@ -678,6 +679,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 personality=personality,
                 nickname=nickname,
                 appearance_hint=appearance_hint,
+                size=command.options.get("size", ""),
             )
             return f"已按人格设定排队生成人物参考：{task.id}"
         if command.action == "show":
@@ -694,6 +696,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 category=ReferenceCategory.PERSON,
                 asset_id=person.id,
                 name=person.name,
+                size=command.options.get("size", ""),
             )
             return f"人物参考重生成任务已排队：{task.id}"
         if command.action == "clear":
@@ -726,6 +729,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 name=command.options.get("name", f"{category.value}-{int(time.time())}"),
                 image=image,
                 manual_tags=parse_tags(command.options.get("tags")),
+                size=command.options.get("size", ""),
             )
             return f"参考图任务已排队：{task.id}"
         if command.action == "list":
@@ -757,6 +761,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 category=asset.category,
                 asset_id=asset.id,
                 name=asset.name,
+                size=command.options.get("size", ""),
             )
             return f"任务已排队：{task.id}"
         if command.action == "replace":

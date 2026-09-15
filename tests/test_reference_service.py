@@ -166,6 +166,37 @@ def test_extract_outfit_uses_sheet_prompt_and_compresses_both_artifacts(
     storage.close()
 
 
+def test_reference_generation_options_and_explicit_size_are_forwarded(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    llm = FakeLLM([_tags(ReferenceCategory.OUTFIT), _tags(ReferenceCategory.SCENE)])
+    storage = SQLiteStorage(tmp_path / "db" / "maitu.sqlite3")
+    service = ReferenceService(
+        gallery=ReferenceGallery(storage),
+        provider=provider,  # type: ignore[arg-type]
+        llm=llm,  # type: ignore[arg-type]
+        data_dir=tmp_path / "plugin-data",
+        config=ReferenceServiceConfig(
+            extraction_size="1536x1024",
+            extraction_quality="high",
+            extraction_output_format="webp",
+            extraction_moderation="low",
+            extraction_extra_params={"background": "opaque", "metadata": {"source": "test"}},
+        ),
+    )
+
+    _run(service.extract_reference("outfit", _image(), name="default size"))
+    _run(service.extract_reference("scene", _image(), name="explicit size", size="1024x1024"))
+
+    assert provider.calls[0][1]["size"] == "1536x1024"
+    assert provider.calls[1][1]["size"] == "1024x1024"
+    for _, kwargs in provider.calls:
+        assert kwargs["quality"] == "high"
+        assert kwargs["output_format"] == "webp"
+        assert kwargs["moderation"] == "low"
+        assert kwargs["extra"] == {"background": "opaque", "metadata": {"source": "test"}}
+    storage.close()
+
+
 def test_tag_schema_is_exact_and_public_scene_references_are_not_selectable() -> None:
     valid = validate_reference_tags("outfit", _tags(ReferenceCategory.OUTFIT))
     assert valid.schema_valid is True

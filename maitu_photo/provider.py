@@ -399,6 +399,34 @@ def _json_safe_excerpt(response: httpx.Response) -> str:
     return _redact(body[:2000])
 
 
+def _add_image_output_options(
+    payload: dict[str, Any],
+    *,
+    quality: str | None,
+    output_format: str | None,
+    moderation: str | None,
+) -> None:
+    """Add OpenAI Images output controls while omitting unset values."""
+
+    if quality:
+        payload["quality"] = quality
+    if output_format:
+        payload["output_format"] = output_format
+    if moderation:
+        payload["moderation"] = moderation
+
+
+def _multipart_field_value(value: Any) -> str:
+    """Encode a JSON-compatible extra value as one multipart form field."""
+
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ProviderConfigError("multipart extra parameters must contain JSON-compatible values") from exc
+
+
 class OpenAICompatibleProvider:
     """Async OpenAI-compatible image provider.
 
@@ -868,9 +896,12 @@ class OpenAICompatibleProvider:
         references: Sequence[ImageInput] | None = None,
         image_refs: Sequence[ImageInput] | None = None,
         negative_prompt: str | None = None,
+        quality: str | None = None,
+        output_format: str | None = None,
+        moderation: str | None = None,
         mode: str | None = None,
         n: int = 1,
-        response_format: str | None = "b64_json",
+        response_format: str | None = None,
         extra: Mapping[str, Any] | None = None,
         extraction: bool = False,
     ) -> list[GeneratedImage]:
@@ -902,6 +933,9 @@ class OpenAICompatibleProvider:
                             model=selected_model,
                             size=size,
                             negative_prompt=negative_prompt,
+                            quality=quality,
+                            output_format=output_format,
+                            moderation=moderation,
                             n=n,
                             response_format=response_format,
                             extra=extra,
@@ -912,6 +946,9 @@ class OpenAICompatibleProvider:
                             model=selected_model,
                             size=size,
                             negative_prompt=negative_prompt,
+                            quality=quality,
+                            output_format=output_format,
+                            moderation=moderation,
                             n=n,
                             response_format=response_format,
                             extra=extra,
@@ -976,6 +1013,9 @@ class OpenAICompatibleProvider:
         model: str,
         size: str | None,
         negative_prompt: str | None,
+        quality: str | None,
+        output_format: str | None,
+        moderation: str | None,
         n: int,
         response_format: str | None,
         extra: Mapping[str, Any] | None,
@@ -988,6 +1028,12 @@ class OpenAICompatibleProvider:
             # gateways; preserving it as a separate field lets those gateways
             # apply their own semantics instead of silently dropping it.
             payload["negative_prompt"] = negative_prompt
+        _add_image_output_options(
+            payload,
+            quality=quality,
+            output_format=output_format,
+            moderation=moderation,
+        )
         if response_format:
             payload["response_format"] = response_format
         if extra:
@@ -1002,6 +1048,9 @@ class OpenAICompatibleProvider:
         model: str,
         size: str | None,
         negative_prompt: str | None,
+        quality: str | None,
+        output_format: str | None,
+        moderation: str | None,
         n: int,
         response_format: str | None,
         extra: Mapping[str, Any] | None,
@@ -1022,10 +1071,16 @@ class OpenAICompatibleProvider:
             fields["size"] = size
         if negative_prompt:
             fields["negative_prompt"] = negative_prompt
+        _add_image_output_options(
+            fields,
+            quality=quality,
+            output_format=output_format,
+            moderation=moderation,
+        )
         if response_format:
             fields["response_format"] = response_format
         if extra:
-            fields.update(dict(extra))
+            fields.update({key: _multipart_field_value(value) for key, value in extra.items()})
         return await self._post_multipart(self.endpoint("images/edits"), data=fields, files=files)
 
     async def _images_edit_json(
@@ -1036,6 +1091,9 @@ class OpenAICompatibleProvider:
         model: str,
         size: str | None,
         negative_prompt: str | None,
+        quality: str | None,
+        output_format: str | None,
+        moderation: str | None,
         n: int,
         response_format: str | None,
         extra: Mapping[str, Any] | None,
@@ -1044,7 +1102,8 @@ class OpenAICompatibleProvider:
 
         Some compatible gateways (including Grok Imagine) reject OpenAI-style
         multipart edits with HTTP 415 and require ``application/json`` instead.
-        ``response_format`` is omitted unless the caller puts it in ``extra``.
+        ``response_format`` is omitted by default and included when explicitly
+        supplied by the caller.
         """
 
         if not images:
@@ -1063,11 +1122,16 @@ class OpenAICompatibleProvider:
             payload["size"] = size
         if negative_prompt:
             payload["negative_prompt"] = negative_prompt
+        _add_image_output_options(
+            payload,
+            quality=quality,
+            output_format=output_format,
+            moderation=moderation,
+        )
+        if response_format:
+            payload["response_format"] = response_format
         if extra:
             payload.update(dict(extra))
-        # OpenAI's response_format is omitted unless the caller set it in extra.
-        # xAI-style JSON edits treat unknown fields as errors on some gateways.
-        _ = response_format
         return await self._post_json(self.endpoint("images/edits"), payload)
 
     async def _chat_generate(

@@ -66,6 +66,26 @@
 | `images_json` | 同样使用 Images API，但参考图以 JSON data URL 发送（Grok Imagine 等；可避免 multipart 的 415）。 |
 | `chat_completions` | 多模态聊天生图（Gemini 等），会请求图片输出。 |
 
+### 图片输出参数
+
+`openai` 配置组为普通写真/环境照和参考板提供两套彼此独立的 Images 参数：
+
+| 用途 | 分辨率 | 质量 | 输出格式 | 审核强度 | 额外请求字段 |
+| --- | --- | --- | --- | --- | --- |
+| 写真与环境照 | `generation_size` | `generation_quality` | `generation_output_format` | `generation_moderation` | `generation_extra_params` |
+| 人物、服装、场景参考板 | `reference_size` | `reference_quality` | `reference_output_format` | `reference_moderation` | `reference_extra_params` |
+
+这些字段默认留空（额外参数默认为空对象），以便旧配置继续由服务商决定默认行为。分辨率可填写 `auto` 或 `WIDTHxHEIGHT`；质量可选 `auto/low/medium/high/xhigh/max/standard/hd`，输出格式可选 `png/jpeg/webp`，审核强度可选 `auto/low`。具体可用值仍以所选模型和兼容服务商为准。
+
+生图工具显式传入的 `size` 优先于 `generation_size`；参考图提取、生成或重生成管理员命令中的 `分辨率=`（也可写 `size=`）优先于 `reference_size`。例如：
+
+```text
+/maitu 人物 提取 分辨率=1024x1024
+/maitu 参考 重生成 <参考图ID> size=1536x1024
+```
+
+`generation_extra_params` 和 `reference_extra_params` 是 JSON 对象，只能补充请求体字段。为防止绕过插件管理，不能包含 `model`、`prompt`、`n`、`size`、`quality`、`output_format`、`moderation`、`response_format`、`negative_prompt`、`image`、`images` 或 `messages` 等字段。`images_api` 与 `images_json` 会发送 Images 专用参数；`chat_completions` 不发送质量、输出格式和审核强度，但仍保留既有的 `size` 与额外 JSON 透传。GPT Image 请求默认不再强制发送 `response_format=b64_json`，插件仍能解析服务商返回的 URL 或 base64 图片。
+
 ## 安装
 
 将仓库放入 MaiBot 第三方插件目录，保留下面的结构：

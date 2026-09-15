@@ -25,13 +25,13 @@ _CHINESE_TEXT = re.compile(r"[\u4e00-\u9fff]")
 
 def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     config = PhotoPluginConfig()
-    assert config.plugin.config_version == "1.5.0"
+    assert config.plugin.config_version == "1.6.0"
     assert config.references.require_person_reference is True
     assert not hasattr(config.references, "planner_gallery_management_enabled")
     schema = generate_plugin_config_schema(PhotoPluginConfig)
     fields = [field for section in schema["sections"].values() for field in section["fields"].values()]
 
-    assert len(fields) == 103
+    assert len(fields) == 113
     for field in fields:
         assert _CHINESE_TEXT.search(field["label"]), field["name"]
         assert _CHINESE_TEXT.search(field["description"]), field["name"]
@@ -50,6 +50,89 @@ def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     assert "images_json" in openai_fields["generation_mode"]["hint"]
     assert "chat_completions" in openai_fields["generation_mode"]["hint"]
     assert "不会改用其他方式" in openai_fields["generation_mode"]["hint"]
+    assert openai_fields["generation_extra_params"]["ui_type"] == "json"
+
+
+def test_image_request_options_have_compatible_defaults_and_separate_values() -> None:
+    config = PhotoPluginConfig()
+
+    assert config.openai.generation_size == ""
+    assert config.openai.generation_quality == ""
+    assert config.openai.generation_output_format == ""
+    assert config.openai.generation_moderation == ""
+    assert config.openai.generation_extra_params == {}
+    assert config.openai.reference_size == ""
+    assert config.openai.reference_quality == ""
+    assert config.openai.reference_output_format == ""
+    assert config.openai.reference_moderation == ""
+    assert config.openai.reference_extra_params == {}
+
+    configured = PhotoPluginConfig.model_validate(
+        {
+            "openai": {
+                "generation_size": " 1536x1024 ",
+                "generation_quality": "max",
+                "generation_output_format": "jpeg",
+                "generation_moderation": "auto",
+                "generation_extra_params": {"background": "opaque", "partial_images": 0},
+                "reference_size": "AUTO",
+                "reference_quality": "low",
+                "reference_output_format": "webp",
+                "reference_moderation": "low",
+                "reference_extra_params": {"background": "transparent"},
+            }
+        }
+    )
+
+    assert configured.openai.generation_size == "1536x1024"
+    assert configured.openai.generation_extra_params["partial_images"] == 0
+    assert configured.openai.reference_size == "auto"
+    assert configured.openai.reference_extra_params == {"background": "transparent"}
+
+
+@pytest.mark.parametrize("field_name", ["generation_extra_params", "reference_extra_params"])
+@pytest.mark.parametrize(
+    "reserved_key",
+    [
+        "model",
+        "prompt",
+        "n",
+        "size",
+        "quality",
+        "output_format",
+        "moderation",
+        "response_format",
+        "negative_prompt",
+        "image",
+        "images",
+        "messages",
+        " Output_Format ",
+    ],
+)
+def test_image_extra_params_reject_plugin_managed_fields(field_name: str, reserved_key: str) -> None:
+    with pytest.raises(ValueError, match="不能覆盖插件管理字段"):
+        PhotoPluginConfig.model_validate({"openai": {field_name: {reserved_key: "override"}}})
+
+
+def test_image_extra_params_reject_non_json_values() -> None:
+    with pytest.raises(ValueError, match="可序列化的 JSON"):
+        PhotoPluginConfig.model_validate({"openai": {"generation_extra_params": {"invalid": float("nan")}}})
+
+
+@pytest.mark.parametrize("value", ["1024*1024", "1024x", "0x1024", "square"])
+def test_image_size_rejects_invalid_syntax(value: str) -> None:
+    with pytest.raises(ValueError, match="图片分辨率"):
+        PhotoPluginConfig.model_validate({"openai": {"generation_size": value}})
+
+
+def test_legacy_openai_config_without_image_options_keeps_empty_defaults() -> None:
+    config = PhotoPluginConfig.model_validate(
+        {"openai": {"base_url": "https://provider.example", "generation_model": "legacy-image-model"}}
+    )
+
+    assert config.openai.generation_model == "legacy-image-model"
+    assert config.openai.generation_size == ""
+    assert config.openai.reference_extra_params == {}
 
 
 def test_legacy_planner_gallery_flag_is_dropped() -> None:

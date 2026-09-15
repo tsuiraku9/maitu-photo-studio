@@ -142,6 +142,10 @@ class ReferenceServiceConfig:
     reference_model: str = ""
     reference_mode: str = ""
     extraction_size: str = ""
+    extraction_quality: str = ""
+    extraction_output_format: str = ""
+    extraction_moderation: str = ""
+    extraction_extra_params: Mapping[str, Any] = field(default_factory=dict)
     prompt_version: str = ""
 
     def __post_init__(self) -> None:
@@ -561,6 +565,14 @@ class ReferenceService:
         selected_size = size or self.config.extraction_size
         if selected_size:
             kwargs["size"] = selected_size
+        if self.config.extraction_quality:
+            kwargs["quality"] = self.config.extraction_quality
+        if self.config.extraction_output_format:
+            kwargs["output_format"] = self.config.extraction_output_format
+        if self.config.extraction_moderation:
+            kwargs["moderation"] = self.config.extraction_moderation
+        if self.config.extraction_extra_params:
+            kwargs["extra"] = dict(self.config.extraction_extra_params)
         if self._before_provider_request is not None:
             self._before_provider_request()
         try:

@@ -112,7 +112,14 @@ def test_images_generation_uses_expected_endpoint_and_parses_b64_json() -> None:
                 generation_model="image-model",
                 client=client,
             )
-            return await provider.generate("a portrait", size="1024x1024")
+            return await provider.generate(
+                "a portrait",
+                size="1024x1024",
+                quality="high",
+                output_format="png",
+                moderation="auto",
+                extra={"background": "opaque"},
+            )
 
     result = _run(scenario())
 
@@ -125,11 +132,14 @@ def test_images_generation_uses_expected_endpoint_and_parses_b64_json() -> None:
         "prompt": "a portrait",
         "n": 1,
         "size": "1024x1024",
-        "response_format": "b64_json",
+        "quality": "high",
+        "output_format": "png",
+        "moderation": "auto",
+        "background": "opaque",
     }
 
 
-def test_gpt_image_generation_requests_base64_output() -> None:
+def test_images_generation_includes_explicit_response_format() -> None:
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -148,7 +158,7 @@ def test_gpt_image_generation_requests_base64_output() -> None:
                 generation_model="gpt-image-2",
                 client=client,
             )
-            return await provider.generate("a portrait")
+            return await provider.generate("a portrait", response_format="b64_json")
 
     _run(scenario())
 
@@ -214,7 +224,15 @@ def test_images_edit_preserves_reference_order_in_multipart_body() -> None:
                 generation_model="gpt-image-2",
                 client=client,
             )
-            return await provider.edit_image("keep identity", [first, second])
+            return await provider.edit_image(
+                "keep identity",
+                [first, second],
+                size="1024x1536",
+                quality="low",
+                output_format="webp",
+                moderation="low",
+                extra={"background": "opaque", "vendor_options": {"weights": [1, True]}},
+            )
 
     _run(scenario())
 
@@ -224,7 +242,13 @@ def test_images_edit_preserves_reference_order_in_multipart_body() -> None:
     assert str(seen["content_type"]).startswith("multipart/form-data; boundary=")
     assert body.find(first) < body.find(second)
     assert body.count(b'name="image"') == 2
-    assert b'name="response_format"' in body
+    assert b'name="response_format"' not in body
+    assert b'name="size"' in body and b"1024x1536" in body
+    assert b'name="quality"' in body and b"low" in body
+    assert b'name="output_format"' in body and b"webp" in body
+    assert b'name="moderation"' in body
+    assert b'name="background"' in body and b"opaque" in body
+    assert b'name="vendor_options"' in body and b'{"weights":[1,true]}' in body
     assert b"reference-0.jpeg" in body
     assert b"reference-1.jpeg" in body
 
@@ -276,7 +300,15 @@ def test_chat_completions_sends_ordered_multimodal_content_and_parses_markdown()
                 generation_model="chat-image-model",
                 client=client,
             )
-            return await provider.generate("photo", images=references)
+            return await provider.generate(
+                "photo",
+                images=references,
+                size="1024x1024",
+                quality="high",
+                output_format="jpeg",
+                moderation="low",
+                extra={"background": "opaque"},
+            )
 
     result = _run(scenario())
 
@@ -289,6 +321,11 @@ def test_chat_completions_sends_ordered_multimodal_content_and_parses_markdown()
     assert base64.b64decode(content[1]["image_url"]["url"].split(",", 1)[1]) == references[0]
     assert base64.b64decode(content[2]["image_url"]["url"].split(",", 1)[1]) == references[1]
     assert payload["modalities"] == ["text", "image"]
+    assert payload["size"] == "1024x1024"
+    assert payload["background"] == "opaque"
+    assert "quality" not in payload
+    assert "output_format" not in payload
+    assert "moderation" not in payload
 
 
 def test_images_json_sends_data_url_references_without_multipart() -> None:
@@ -316,7 +353,15 @@ def test_images_json_sends_data_url_references_without_multipart() -> None:
                 generation_model="grok-imagine-image-2.0",
                 client=client,
             )
-            return await provider.edit_image("compose", [first, second])
+            return await provider.edit_image(
+                "compose",
+                [first, second],
+                size="1024x1024",
+                quality="max",
+                output_format="jpeg",
+                moderation="auto",
+                extra={"background": "opaque"},
+            )
 
     result = _run(scenario())
 
@@ -328,6 +373,11 @@ def test_images_json_sends_data_url_references_without_multipart() -> None:
     assert payload["model"] == "grok-imagine-image-2.0"
     assert payload["prompt"] == "compose"
     assert "response_format" not in payload
+    assert payload["size"] == "1024x1024"
+    assert payload["quality"] == "max"
+    assert payload["output_format"] == "jpeg"
+    assert payload["moderation"] == "auto"
+    assert payload["background"] == "opaque"
     refs = payload["images"]
     assert isinstance(refs, list)
     assert len(refs) == 2

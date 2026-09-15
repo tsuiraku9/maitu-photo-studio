@@ -487,6 +487,7 @@ class PhotoStudioService:
         personality: str = "",
         nickname: str = "",
         appearance_hint: str = "",
+        size: str = "",
     ) -> ImageTask:
         operation = operation.strip().casefold()
         if operation not in {"extract", "import", "retag", "regenerate", "replace", "generate_person"}:
@@ -513,6 +514,7 @@ class PhotoStudioService:
             "personality": personality.strip(),
             "nickname": nickname.strip(),
             "appearance_hint": appearance_hint.strip(),
+            "size": size.strip(),
         }
         try:
             if image is not None:
@@ -822,8 +824,12 @@ class PhotoStudioService:
             prompt,
             images=references or None,
             model=str(payload.get("model_id") or "") or None,
-            size=str(payload.get("size") or "") or None,
+            size=str(payload.get("size") or self.config.openai.generation_size or "") or None,
             negative_prompt=self.config.prompts.negative_prompt or None,
+            quality=self.config.openai.generation_quality or None,
+            output_format=self.config.openai.generation_output_format or None,
+            moderation=self.config.openai.generation_moderation or None,
+            extra=self.config.openai.generation_extra_params or None,
             mode=self.config.openai.generation_mode,
         )
         if self._task_cancelled(task.id):
@@ -934,8 +940,12 @@ class PhotoStudioService:
             prompt,
             images=references or None,
             model=str(payload.get("model_id") or "") or None,
-            size=str(payload.get("size") or "") or None,
+            size=str(payload.get("size") or self.config.openai.generation_size or "") or None,
             negative_prompt=self.config.prompts.negative_prompt or None,
+            quality=self.config.openai.generation_quality or None,
+            output_format=self.config.openai.generation_output_format or None,
+            moderation=self.config.openai.generation_moderation or None,
+            extra=self.config.openai.generation_extra_params or None,
             mode=self.config.openai.generation_mode,
         )
         if self._task_cancelled(task.id):
@@ -1180,6 +1190,7 @@ class PhotoStudioService:
                 replace_person=False,
                 source_task_id=task.id,
                 generation_prompt=self.config.prompts.generate_person_from_personality,
+                size=str(payload.get("size") or ""),
             )
         elif operation in {"extract", "import", "replace"}:
             if category is None:
@@ -1195,6 +1206,7 @@ class PhotoStudioService:
                     replace_person=replace_person,
                     manual_tags=_mapping(payload.get("manual_tags")),
                     source_task_id=task.id,
+                    size=str(payload.get("size") or ""),
                 )
             else:
                 asset = await service.import_reference(
@@ -1213,7 +1225,11 @@ class PhotoStudioService:
         elif operation == "retag":
             asset = await service.retag_reference(str(payload.get("asset_id") or ""))
         elif operation == "regenerate":
-            asset = await service.regenerate_reference(str(payload.get("asset_id") or ""), source_task_id=task.id)
+            asset = await service.regenerate_reference(
+                str(payload.get("asset_id") or ""),
+                source_task_id=task.id,
+                size=str(payload.get("size") or ""),
+            )
         else:
             raise ValueError(f"未知参考图任务操作: {operation}")
         if bool(payload.get("automatic")):
@@ -1323,6 +1339,11 @@ class PhotoStudioService:
                 tagging_max_tokens=self.config.model_tasks.max_tokens,
                 reference_model=self.config.openai.reference_model,
                 reference_mode=self.config.openai.reference_mode,
+                extraction_size=self.config.openai.reference_size,
+                extraction_quality=self.config.openai.reference_quality,
+                extraction_output_format=self.config.openai.reference_output_format,
+                extraction_moderation=self.config.openai.reference_moderation,
+                extraction_extra_params=self.config.openai.reference_extra_params,
                 prompt_version=self.config.plugin.config_version,
             ),
         )

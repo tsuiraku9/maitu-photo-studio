@@ -201,6 +201,36 @@ def test_scene_photo_generation_persists_sends_and_notifies_planner(tmp_path: Pa
     asyncio.run(scenario())
 
 
+def test_generation_defaults_and_task_size_are_forwarded(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        config = _config()
+        config.openai.generation_size = "1536x1024"
+        config.openai.generation_quality = "xhigh"
+        config.openai.generation_output_format = "jpeg"
+        config.openai.generation_moderation = "auto"
+        config.openai.generation_extra_params = {"background": "opaque", "metadata": {"source": "test"}}
+        ctx = _Context(_scene_photo_llm_replies("first") + _scene_photo_llm_replies("second"))
+        service = PhotoStudioService(ctx, config, tmp_path)
+        provider = _Provider([_png("red"), _png("blue")])
+        service._provider = provider  # type: ignore[assignment]
+        await service.start()
+
+        service.submit_scene_photo(_invocation(), description="default size")
+        service.submit_scene_photo(_invocation(), description="explicit size", size="1024x1024")
+        assert await service.tasks.drain(timeout=3)
+
+        assert provider.calls[0][1]["size"] == "1536x1024"
+        assert provider.calls[1][1]["size"] == "1024x1024"
+        for _, kwargs in provider.calls:
+            assert kwargs["quality"] == "xhigh"
+            assert kwargs["output_format"] == "jpeg"
+            assert kwargs["moderation"] == "auto"
+            assert kwargs["extra"] == {"background": "opaque", "metadata": {"source": "test"}}
+        await service.close()
+
+    asyncio.run(scenario())
+
+
 def test_prepared_reference_import_does_not_require_openai_provider(tmp_path: Path) -> None:
     async def scenario() -> None:
         config = PhotoPluginConfig()
@@ -995,7 +1025,13 @@ def test_reference_extraction_marks_paid_request_before_provider_call(tmp_path: 
                 }
             ]
         )
-        service = PhotoStudioService(ctx, _config(), tmp_path)
+        config = _config()
+        config.openai.reference_size = "1536x1024"
+        config.openai.reference_quality = "high"
+        config.openai.reference_output_format = "webp"
+        config.openai.reference_moderation = "low"
+        config.openai.reference_extra_params = {"background": "opaque"}
+        service = PhotoStudioService(ctx, config, tmp_path)
 
         class InspectingProvider(_Provider):
             def __init__(self) -> None:
@@ -1017,6 +1053,7 @@ def test_reference_extraction_marks_paid_request_before_provider_call(tmp_path: 
             category=ReferenceCategory.OUTFIT,
             name="summer dress",
             image=_png("blue"),
+            size="1024x1024",
         )
         provider.task_id = task.id
         assert await service.tasks.drain(timeout=3)
@@ -1025,6 +1062,11 @@ def test_reference_extraction_marks_paid_request_before_provider_call(tmp_path: 
         assert saved is not None and saved.status == TaskStatus.SENT
         assert saved.paid_request_started is True
         assert provider.saw_paid_request is True
+        assert provider.calls[0][1]["size"] == "1024x1024"
+        assert provider.calls[0][1]["quality"] == "high"
+        assert provider.calls[0][1]["output_format"] == "webp"
+        assert provider.calls[0][1]["moderation"] == "low"
+        assert provider.calls[0][1]["extra"] == {"background": "opaque"}
         await service.close()
 
     asyncio.run(scenario())
