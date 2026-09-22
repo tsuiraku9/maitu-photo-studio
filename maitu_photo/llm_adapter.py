@@ -60,23 +60,22 @@ class MaiBotLLMAdapter:
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> dict[str, Any]:
+        # Host 1.2.5 treats model= as [[models]].name once task_name is present.
+        # Omit empty task_name so SDK keeps its default (utils); do not send model=.
+        generate_kwargs: dict[str, Any] = {
+            "prompt": prompt,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "timeout_ms": self._rpc_timeout_ms,
+        }
+        normalized_task_name = task_name.strip()
+        if normalized_task_name:
+            generate_kwargs["task_name"] = normalized_task_name
         if self._generate is not None:
-            return await self._generate(
-                prompt=prompt,
-                model=task_name,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout_ms=self._rpc_timeout_ms,
-            )
+            return await self._generate(**generate_kwargs)
         if self.ctx is None:
             raise LLMAdapterError("MaiBot LLM 上下文尚未注入")
-        return await self.ctx.llm.generate(
-            prompt=prompt,
-            model=task_name,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout_ms=self._rpc_timeout_ms,
-        )
+        return await self.ctx.llm.generate(**generate_kwargs)
 
     async def generate_json(
         self,

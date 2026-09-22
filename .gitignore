@@ -4,12 +4,14 @@ data/
 logs/
 .dev/
 .venv/
+*.egg-info/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
 .agents/
 /AGENTS_HANDOFF.md
+CLAUDE.md
 
 # Local credentials, archives, and databases
 生图测试用api.md
