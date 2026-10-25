@@ -136,6 +136,12 @@ class ReferenceServiceConfig:
     compression: CompressionConfig = field(default_factory=CompressionConfig)
     prompts: ReferencePrompts = field(default_factory=ReferencePrompts)
     auto_enable_generated_references: bool = True
+    auto_review_generated_references: bool = True
+    review_min_confidence: float = 0.65
+    max_references: Mapping[str, int] = field(
+        default_factory=lambda: {"person": 1, "outfit": 30, "scene": 20}
+    )
+    capacity_policy: str = "reject"
     tagging_task_name: str = "vlm"
     tagging_temperature: float | None = 0.1
     tagging_max_tokens: int | None = 2048
@@ -155,6 +161,13 @@ class ReferenceServiceConfig:
             raise ValueError("tagging_task_name must not be empty")
         if self.tagging_max_tokens is not None and self.tagging_max_tokens <= 0:
             raise ValueError("tagging_max_tokens must be positive")
+        if not 0 <= self.review_min_confidence <= 1:
+            raise ValueError("review_min_confidence must be between 0 and 1")
+        if self.capacity_policy not in {"reject", "evict_automatic"}:
+            raise ValueError("capacity_policy must be reject or evict_automatic")
+        for category in ("person", "outfit", "scene"):
+            if int(self.max_references.get(category, 1)) < 1:
+                raise ValueError("reference capacity must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,6 +428,7 @@ class ReferenceService:
             prompt_version=prompt_version or self._prompt_version("personality", prompt),
             source_kind="personality_generate",
             provider_media_type=generated.media_type,
+            automatic_backfill=False,
         )
 
     async def extract_reference(
@@ -431,6 +445,7 @@ class ReferenceService:
         size: str = "",
         prepared_source: CompressionResult | None = None,
         replaces_asset_id: str | None = None,
+        automatic_backfill: bool = False,
     ) -> ReferenceAsset:
         """Generate the category's multi-angle reference board from an upload."""
 
@@ -455,6 +470,7 @@ class ReferenceService:
             source_kind="model_extract",
             provider_media_type=generated.media_type,
             replaces_asset_id=replaces_asset_id,
+            automatic_backfill=automatic_backfill,
         )
 
     async def retag_reference(
@@ -478,14 +494,25 @@ class ReferenceService:
                 previous_status = updated.status
                 if tagging.schema_valid:
                     updated.tags = dict(tagging.tags)
-                effective = self._effective_tagging(updated.category, tagging, updated.manual_tags)
+                effective = self._review_tagging(
+                    self._effective_tagging(updated.category, tagging, updated.manual_tags)
+                )
                 if not effective.selectable:
                     updated.status = AssetStatus.NEEDS_REVIEW
                 elif previous_status in (AssetStatus.ACTIVE, AssetStatus.DISABLED):
                     updated.status = previous_status
                 else:
                     updated.status = self._status_for(effective)
-                updated.selection_metadata.update(self._tagging_metadata(effective, reference_result))
+                updated.selection_metadata.update(
+                    {
+                        **self._tagging_metadata(effective, reference_result),
+                        "review": {
+                            "enabled": self.config.auto_review_generated_references,
+                            "passed": effective.selectable,
+                            "minimum_confidence": self.config.review_min_confidence,
+                        },
+                    }
+                )
                 updated.prompt_version = self._prompt_version("retag", prompt)
                 updated = self.gallery.storage.update_reference_asset(updated)
                 self._notify_persisted(updated)
@@ -500,6 +527,7 @@ class ReferenceService:
         prompt_version: str = "",
         size: str = "",
         source_task_id: str | None = None,
+        automatic_backfill: bool = False,
     ) -> ReferenceAsset:
         """Regenerate an asset from its retained source and replace its record.
 
@@ -538,6 +566,7 @@ class ReferenceService:
             source_kind="model_regenerate",
             provider_media_type=generated.media_type,
             replaces_asset_id=old.id,
+            automatic_backfill=automatic_backfill,
         )
         return replacement
 
@@ -664,6 +693,7 @@ class ReferenceService:
         source_kind: str,
         provider_media_type: str = "",
         replaces_asset_id: str | None = None,
+        automatic_backfill: bool = False,
     ) -> ReferenceAsset:
         # Direct imports arrive here before any model request.  Do not retag,
         # rename, re-enable, or otherwise mutate a byte-identical live record.
@@ -686,11 +716,13 @@ class ReferenceService:
             prompt=self.config.prompts.tagging_for(category),
         )
         effective = self._effective_tagging(category, tagging, manual.tags)
+        effective = self._review_tagging(effective)
         status = self._status_for(effective)
         token = uuid4().hex
         source_path = self._artifact_path("sources", category, token)
         reference_path = self._artifact_path("references", category, token)
 
+        evicted: list[ReferenceAsset] = []
         async with self._mutation_lock:
             written: list[Path] = []
             try:
@@ -705,6 +737,13 @@ class ReferenceService:
                         return existing
                     self._validate_request(category, name, replace_person)
                     self._require_replacement(replaces_asset_id, category)
+                    if replaces_asset_id is None and category != ReferenceCategory.PERSON:
+                        evicted = self.gallery.make_capacity_room(
+                            category,
+                            limit=int(self.config.max_references.get(category.value, 1)),
+                            policy=self.config.capacity_policy,
+                            automatic_backfill=automatic_backfill,
+                        )
                     # Track the paths before writing, including failures raised
                     # just after an atomic replace has made a file visible.
                     written.append(source_path)
@@ -728,6 +767,12 @@ class ReferenceService:
                             "source_compression": source_result.to_dict(),
                             "reference_compression": reference_result.to_dict(),
                             "provider_media_type": provider_media_type,
+                            "automatic_backfill": automatic_backfill,
+                            "review": {
+                                "enabled": self.config.auto_review_generated_references,
+                                "passed": effective.selectable,
+                                "minimum_confidence": self.config.review_min_confidence,
+                            },
                             **self._tagging_metadata(effective, reference_result),
                         },
                         replace_person=replace_person,
@@ -742,6 +787,7 @@ class ReferenceService:
                     except OSError:
                         pass
                 raise
+        self._cleanup_evicted_assets(evicted)
         return asset
 
     def _ensure_mutation_allowed(self) -> None:
@@ -775,6 +821,44 @@ class ReferenceService:
         if self.config.auto_enable_generated_references:
             return AssetStatus.ACTIVE
         return AssetStatus.DISABLED
+
+    def _review_tagging(self, tagging: TagValidationResult) -> TagValidationResult:
+        """Apply the configured post-generation quality gate to model tags."""
+
+        if not self.config.auto_review_generated_references or not tagging.selectable:
+            return tagging
+        confidence = tagging.tags.get("confidence")
+        if isinstance(confidence, (int, float)) and confidence < self.config.review_min_confidence:
+            return TagValidationResult(
+                tags=dict(tagging.tags),
+                schema_valid=True,
+                selectable=False,
+                error_code="low_confidence",
+                errors=(
+                    f"reference confidence {float(confidence):.3f} is below "
+                    f"{self.config.review_min_confidence:.3f}",
+                ),
+            )
+        return tagging
+
+    def _cleanup_evicted_assets(self, assets: list[ReferenceAsset]) -> None:
+        """Remove only our own generated artifacts after their tombstones commit."""
+
+        for asset in assets:
+            for kind, value in (("sources", asset.source_path), ("references", asset.reference_path)):
+                path = Path(value)
+                if not path.is_absolute():
+                    path = self.data_dir / path
+                path = path.resolve()
+                root = (self.data_dir / kind / asset.category.value).resolve()
+                if path.parent != root:
+                    continue
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    # The tombstone remains authoritative; a later maintenance
+                    # pass can remove an orphan without re-importing it.
+                    continue
 
     @staticmethod
     def _tagging_metadata(

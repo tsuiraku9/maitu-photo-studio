@@ -92,6 +92,10 @@
 
 `model_tasks.selection_candidate_limit_per_category` 控制每次图库选择分别传给辅助模型的服装和场景候选数量，默认每类 12 条；两类都需要选择时最多传入 24 条候选元数据。它不改变最终生图使用的参考图数量和顺序，人物、服装、场景仍各最多一张，并保持人物 → 服装 → 场景。
 
+参考图会先按 `references.outfit_style`、`references.scene_style` 以及工具传入的提示过滤标签，再沿用原有的连续性、辅助模型选择和匹配度排序策略。`model_tasks.outfit_text_fallback_probability` 可设置即使存在合适服装参考图也回退到文字生成的概率；当前连续性中的服装优先保留，文字回退成功后会按原流程触发服装自动补库。
+
+`references` 还提供 `max_person_references`、`max_outfit_references` 和 `max_scene_references` 三个图库上限，以及 `capacity_policy`。`reject` 达到上限后停止新增；`evict_automatic` 只会淘汰最旧、未被当前任务或连续性占用的自动补库条目，人工上传、管理员导入或手动生成的参考图不会被自动淘汰。`auto_review_generated_references` 开启时，参考板生成后会自动检查标签结构、类别资格和置信度，未通过的条目会保留在“待审核”状态。
+
 ## 安装
 
 将仓库放入 MaiBot 第三方插件目录，保留下面的结构：
@@ -216,8 +220,9 @@ python -m pip install -r requirements.txt
 
 **服装与场景**
 
-- 有服装参考图时由参考图控制服装；没有合适参考时使用 `clothing_style_prompt` 和文字提示回退。
-- 场景参考只在目标被判定为合格的私密室内空间时使用。
+- `references.outfit_style` 和 `references.scene_style` 同时用于参考图标签过滤与生成提示词，适合固定“清爽日常”“温馨极简居家”等长期风格要求。
+- 有合适服装参考图时由参考图控制服装；没有合适参考，或命中 `model_tasks.outfit_text_fallback_probability` 时，使用 `clothing_style_prompt` 和文字提示回退。
+- 场景参考只在目标被判定为合格的私密室内空间时使用；无合适场景参考时使用文字场景风格生成。
 
 **聊天连续性**
 
@@ -349,7 +354,7 @@ flowchart TD
 /maitu 任务 取消 <任务ID>
 ```
 
-场景参考在导入、提取或自动补库完成后会自动打标；标签通过校验且 `references.auto_enable_generated_references=true` 时会直接启用。此前因旧版场景标签提示词缺少字段而留下的“待审核”条目，重载插件后执行 `/maitu 参考 重标 <参考图ID>` 即可重新打标并按该开关自动启用；`/maitu 参考 审核通过 <参考图ID>` 是“启用”的别名，只接受标签有效的条目。
+场景、服装和人物参考在导入、提取或自动补库完成后都会自动审核和打标；标签通过校验、置信度达到 `references.review_min_confidence` 且 `references.auto_enable_generated_references=true` 时会直接启用。未通过的条目会保留原图和审核原因并进入“待审核”，不会参与生图。此前因旧版场景标签提示词缺少字段而留下的“待审核”条目，重载插件后执行 `/maitu 参考 重标 <参考图ID>` 即可重新审核；`/maitu 参考 审核通过 <参考图ID>` 是“启用”的别名，只接受标签有效的条目。
 
 删除参考图和清空人物参考是二次确认操作。第一次会返回一个只对当前管理员、五分钟内有效的令牌；不要把令牌写入日志、截图或仓库。第二次执行示例：
 

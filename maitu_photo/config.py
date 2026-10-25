@@ -101,7 +101,7 @@ class PluginSection(PluginConfigBase):
     __ui_label__ = "插件与权限"
     __ui_icon__ = "photo_camera"
     config_version: str = Field(
-        default="1.7.0",
+        default="1.8.0",
         description="插件配置版本",
         json_schema_extra=_ui("配置版本", "用于配置迁移，请勿手动修改。"),
     )
@@ -353,12 +353,25 @@ class ModelTaskSection(PluginConfigBase):
             "每次图库选择分别传给辅助模型的服装和场景候选上限；两类都参与时总数最多为此值的两倍。",
         ),
     )
+    outfit_text_fallback_probability: float = Field(
+        default=0.0,
+        description="有合适服装参考图时仍回退到文字服装生成的概率",
+        json_schema_extra=_ui(
+            "服装文字回退概率",
+            "仅影响自动选择；显式指定服装参考图或已建立连续性的当前服装不会被随机替换。回退成功后会触发服装自动补库。",
+        ),
+    )
 
-    @field_validator("rpc_timeout_seconds", "selection_candidate_limit_per_category", mode="before")
+    @field_validator(
+        "rpc_timeout_seconds",
+        "selection_candidate_limit_per_category",
+        "outfit_text_fallback_probability",
+        mode="before",
+    )
     @classmethod
     def _reject_boolean_limits(cls, value: Any) -> Any:
         if isinstance(value, bool):
-            raise ValueError("辅助模型超时和候选数量不能使用布尔值")
+            raise ValueError("辅助模型超时、候选数量和回退概率不能使用布尔值")
         return value
 
     @field_validator("rpc_timeout_seconds")
@@ -373,6 +386,13 @@ class ModelTaskSection(PluginConfigBase):
     def _validate_selection_candidate_limit(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("每类参考图选择候选数量必须大于 0")
+        return value
+
+    @field_validator("outfit_text_fallback_probability")
+    @classmethod
+    def _validate_outfit_text_fallback_probability(cls, value: float) -> float:
+        if not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError("服装文字回退概率必须位于 0 和 1 之间")
         return value
 
 
@@ -401,6 +421,24 @@ class ReferenceSection(PluginConfigBase):
         description="默认使用场景参考图",
         json_schema_extra=_ui("使用场景参考图", "仅在合格的室内私密小空间使用场景参考板。"),
     )
+    outfit_style: str = Field(
+        default="",
+        description="默认服装风格要求",
+        json_schema_extra=_ui(
+            "默认服装风格",
+            "会参与服装参考图标签过滤，并写入文字生成提示；例如：清爽日常、甜美、极简、家居休闲。留空表示不限定风格。",
+            placeholder="清爽日常、自然、简约",
+        ),
+    )
+    scene_style: str = Field(
+        default="",
+        description="默认场景风格要求",
+        json_schema_extra=_ui(
+            "默认场景风格",
+            "会参与场景参考图标签过滤，并写入场景生成提示；例如：温馨卧室、明亮自然、极简居家。留空表示不限定风格。",
+            placeholder="温馨、明亮、极简居家",
+        ),
+    )
     auto_extract_missing: bool = Field(
         default=True,
         description="缺少参考图时是否自动从结果提取",
@@ -410,6 +448,42 @@ class ReferenceSection(PluginConfigBase):
         default=True,
         description="生成成功后是否立即启用新参考图",
         json_schema_extra=_ui("自动启用新参考图", "提取成功且标签有效时，立即允许新条目参与选择。"),
+    )
+    auto_review_generated_references: bool = Field(
+        default=True,
+        description="参考板生成后是否自动审核标签和可用资格",
+        json_schema_extra=_ui(
+            "自动审核参考图",
+            "参考板生成或导入后由辅助视觉模型检查类别、标签完整性、置信度和场景私密资格；审核不通过的条目保留为待审核，不参与生图。",
+        ),
+    )
+    review_min_confidence: float = Field(
+        default=0.65,
+        description="参考图自动审核最低置信度",
+        json_schema_extra=_ui("自动审核最低置信度", "低于此值的自动标签会进入待审核状态。范围 0 到 1。"),
+    )
+    max_person_references: int = Field(
+        default=1,
+        description="人物参考图库非删除条目上限",
+        json_schema_extra=_ui("人物参考图数量上限", "人物参考图仍建议保持单例；达到上限不会自动淘汰人物参考图。"),
+    )
+    max_outfit_references: int = Field(
+        default=30,
+        description="服装参考图库非删除条目上限",
+        json_schema_extra=_ui("服装参考图数量上限", "达到上限后按容量策略处理。"),
+    )
+    max_scene_references: int = Field(
+        default=20,
+        description="场景参考图库非删除条目上限",
+        json_schema_extra=_ui("场景参考图数量上限", "达到上限后按容量策略处理。"),
+    )
+    capacity_policy: Literal["reject", "evict_automatic"] = Field(
+        default="reject",
+        description="参考图库达到上限时的处理方式",
+        json_schema_extra=_ui(
+            "图库容量策略",
+            "reject：不再新增；evict_automatic：仅淘汰最旧且未被当前任务/连续性使用的自动补库参考图后新增，人工上传或手动生成的参考图永不自动淘汰。",
+        ),
     )
     max_bytes: int = Field(
         default=480_000,
@@ -435,6 +509,32 @@ class ReferenceSection(PluginConfigBase):
         migrated = dict(data)
         migrated.pop("planner_gallery_management_enabled", None)
         return migrated
+
+    @field_validator("review_min_confidence")
+    @classmethod
+    def _validate_review_confidence(cls, value: float) -> float:
+        if not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError("自动审核最低置信度必须位于 0 和 1 之间")
+        return value
+
+    @field_validator(
+        "max_person_references",
+        "max_outfit_references",
+        "max_scene_references",
+        mode="before",
+    )
+    @classmethod
+    def _validate_reference_capacity(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("参考图库数量上限不能使用布尔值")
+        return value
+
+    @field_validator("max_person_references", "max_outfit_references", "max_scene_references")
+    @classmethod
+    def _validate_reference_capacity_positive(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("参考图库数量上限必须大于 0")
+        return value
 
     def model_post_init(self, __context: Any) -> None:
         if not 1 <= self.max_bytes <= 500_000:

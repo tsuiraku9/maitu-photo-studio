@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "maitu.photo-studio",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "name": "麦麦写真",
   "description": "让麦麦更真实地发送照片：真实照片生成、人物/服装/场景参考图库与聊天连续性。",
   "author": {

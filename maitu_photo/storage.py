@@ -653,6 +653,30 @@ class SQLiteStorage:
                 (_timestamp(used_at), _timestamp(used_at), *unique_ids),
             )
 
+    def reference_is_protected(self, asset_id: str) -> bool:
+        """Return whether an asset is held by an active task or continuity state."""
+
+        with self._lock:
+            self._ensure_open()
+            row = self._connection.execute(
+                """
+                SELECT 1
+                WHERE EXISTS (
+                    SELECT 1 FROM task_references AS ref
+                    JOIN image_tasks AS task ON task.id = ref.task_id
+                    WHERE ref.asset_id = ? AND task.status IN ('queued', 'running', 'generated')
+                )
+                OR EXISTS (
+                    SELECT 1 FROM group_continuity AS state
+                    WHERE state.outfit_id = ? OR state.scene_id = ?
+                       OR state.pinned_outfit_id = ? OR state.pinned_scene_id = ?
+                )
+                LIMIT 1
+                """,
+                (asset_id, asset_id, asset_id, asset_id, asset_id),
+            ).fetchone()
+        return row is not None
+
     # Tasks ------------------------------------------------------------
 
     def create_task(self, task: ImageTask) -> ImageTask:

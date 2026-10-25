@@ -38,6 +38,10 @@ class ReferenceNotSelectableError(GalleryError):
     pass
 
 
+class ReferenceCapacityError(GalleryError):
+    """Raised when a reference category has reached its configured limit."""
+
+
 class ReferenceVersionConflictError(GalleryError):
     """The asset changed since the caller read its ``updated_at`` version."""
 
@@ -364,6 +368,49 @@ class ReferenceGallery:
     def record_usage(self, assets: Iterable[ReferenceAsset | str], *, used_at: datetime | None = None) -> None:
         ids = [asset.id if isinstance(asset, ReferenceAsset) else asset for asset in assets]
         self.storage.increment_reference_usage(ids, used_at=used_at)
+
+    def make_capacity_room(
+        self,
+        category: ReferenceCategory | str,
+        *,
+        limit: int,
+        policy: str,
+        automatic_backfill: bool,
+    ) -> list[ReferenceAsset]:
+        """Reserve one slot, evicting only safe automatic backfills when allowed.
+
+        The caller invokes this inside the same SQLite transaction as the new
+        asset insert.  A rollback therefore restores both the old rows and the
+        new write if persistence fails midway.
+        """
+
+        category = ReferenceCategory(category)
+        if limit < 1:
+            raise ValueError("reference capacity must be positive")
+        assets = self.list_assets(category=category, include_deleted=False, limit=10_000)
+        if len(assets) < limit:
+            return []
+        if policy != "evict_automatic" or not automatic_backfill:
+            raise ReferenceCapacityError(
+                f"{category.value} reference gallery is full ({len(assets)}/{limit}); automatic eviction is disabled"
+            )
+        needed = len(assets) - limit + 1
+        candidates = [
+            asset
+            for asset in sorted(assets, key=lambda item: (item.created_at, item.id))
+            if asset.selection_metadata.get("automatic_backfill") is True
+            and not self.storage.reference_is_protected(asset.id)
+        ]
+        if len(candidates) < needed:
+            raise ReferenceCapacityError(
+                f"{category.value} reference gallery is full and has no evictable automatic backfill"
+            )
+        evicted = candidates[:needed]
+        for asset in evicted:
+            deleted = self.storage.set_reference_status(asset.id, AssetStatus.DELETED)
+            deleted.selection_metadata["evicted_by_capacity"] = True
+            self.storage.update_reference_asset(deleted)
+        return evicted
 
     def record_task_selection(
         self,

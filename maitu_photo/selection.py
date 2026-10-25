@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass
 from typing import Any
 
@@ -65,13 +66,30 @@ class ReferenceSelector:
                 tags.update(str(item).lower() for item in value)
         return len(query & tags)
 
+    @staticmethod
+    def _matches_intent(asset: ReferenceAsset, hint: str) -> bool:
+        """Require a tag/style match before a reference can enter selection.
+
+        A free-form hint is intentionally treated as a filter only when it has
+        usable tokens.  This keeps old galleries selectable while ensuring a
+        configured style never silently picks an unrelated board.
+        """
+
+        tokens = _intent_tokens(hint)
+        if not tokens:
+            return True
+        searchable = _normalized_asset_text(asset)
+        return any(token in searchable for token in tokens)
+
     async def select(
         self,
         *,
         scope_key: str,
         description: str,
         outfit_hint: str = "",
+        outfit_style: str = "",
         scene_hint: str = "",
+        scene_style: str = "",
         explicit_outfit_id: str = "",
         explicit_scene_id: str = "",
         force_new_outfit: bool = False,
@@ -85,6 +103,8 @@ class ReferenceSelector:
         outfit = None
         scene = None
         reasons: dict[str, str] = {}
+        outfit_intent = _combine_intent(outfit_hint, outfit_style)
+        scene_intent = _combine_intent(scene_hint, scene_style)
 
         eligibility_signature = scene_signature.strip()
         if scene_eligible is None:
@@ -93,12 +113,14 @@ class ReferenceSelector:
                     self.prompts.render(
                         "scene_eligibility",
                         description=description,
-                        scene_hint=scene_hint,
+                        scene_hint=_combine_intent(scene_hint, scene_style),
                     ),
                     task_name=self._config_value("selection_task_name", "utils"),
                     temperature=self._config_value("temperature", 0.1),
                     max_tokens=self._config_value("max_tokens", 2048),
                 )
+                if not isinstance(target, dict):
+                    raise ValueError("scene eligibility response must be an object")
                 if not isinstance(target.get("eligible"), bool):
                     raise ValueError("scene eligibility must be boolean")
                 scene_eligible = bool(target["eligible"])
@@ -113,7 +135,7 @@ class ReferenceSelector:
                 # location intent.  Mixing the full photo description back in
                 # reintroduces clothes, poses, and props, which makes the same
                 # room appear to change between consecutive photos.
-                signature_source = scene_hint.strip() or description.strip()
+                signature_source = scene_hint.strip() or scene_style.strip() or description.strip()
                 signature_result = await self.llm.generate_json(
                     self.prompts.render(
                         "scene_signature",
@@ -123,6 +145,8 @@ class ReferenceSelector:
                     temperature=self._config_value("temperature", 0.1),
                     max_tokens=self._config_value("max_tokens", 2048),
                 )
+                if not isinstance(signature_result, dict):
+                    raise ValueError("scene signature response must be an object")
                 scene_signature = str(signature_result.get("scene_signature") or "").strip()
                 if not scene_signature:
                     raise ValueError("scene signature must not be empty")
@@ -150,6 +174,14 @@ class ReferenceSelector:
             reasons["scene"] = "explicit"
 
         previous = self.continuity.get(scope_key)
+        fallback_probability = float(self._config_value("outfit_text_fallback_probability", 0.0) or 0.0)
+        probabilistic_outfit_fallback = (
+            allow_outfit
+            and not explicit_outfit_id
+            and not force_new_outfit
+            and fallback_probability > 0
+            and random.random() < fallback_probability
+        )
         if self._config_value("enabled", True):
             decision = self.continuity.decide(
                 scope_key,
@@ -158,14 +190,17 @@ class ReferenceSelector:
                 force_new_scene=force_new_scene,
                 now=now,
             )
-            if allow_outfit and outfit is None and decision.outfit_id:
+            # Continuity wins over the exploration probability.  Once a scene
+            # already has a reusable outfit, preserving the visual series is
+            # more valuable than deliberately creating a text-only sample.
+            if allow_outfit and outfit is None and decision.outfit_id and not probabilistic_outfit_fallback:
                 candidate = self.gallery.get(decision.outfit_id)
-                if candidate and candidate.is_selectable:
+                if candidate and candidate.is_selectable and self._matches_intent(candidate, outfit_intent):
                     outfit = candidate
                     reasons["outfit"] = decision.outfit_reason
             if allow_scene and scene_eligible and scene is None and decision.scene_id:
                 candidate = self.gallery.get(decision.scene_id)
-                if candidate and candidate.is_selectable:
+                if candidate and candidate.is_selectable and self._matches_intent(candidate, scene_intent):
                     scene = candidate
                     reasons["scene"] = decision.scene_reason
 
@@ -179,11 +214,11 @@ class ReferenceSelector:
 
         outfit_candidates = (
             []
-            if outfit is not None or not allow_outfit
+            if outfit is not None or not allow_outfit or probabilistic_outfit_fallback
             else [
                 item
                 for item in self.gallery.candidates("outfit", include_disabled=False)
-                if item.id not in excluded_outfits
+                if item.id not in excluded_outfits and self._matches_intent(item, outfit_intent)
             ]
         )
         scene_candidates = (
@@ -192,21 +227,20 @@ class ReferenceSelector:
             else [
                 item
                 for item in self.gallery.candidates("scene", include_disabled=False)
-                if item.id not in excluded_scenes
+                if item.id not in excluded_scenes and self._matches_intent(item, scene_intent)
             ]
         )
-        # Matching tags remain the primary signal.  When several references
-        # match equally, prefer the most recently used outfit so a populated
-        # gallery produces a coherent series instead of rotating by accident.
+        # Keep the original model-first strategy and deterministic ordering:
+        # matching tags, then recently used references, then use count.
         outfit_candidates.sort(
             key=lambda item: (
-                -self._score(item, outfit_hint),
+                -self._score(item, outfit_intent),
                 -_last_used_timestamp(item),
                 -item.use_count,
                 item.id,
             )
         )
-        scene_candidates.sort(key=lambda item: (-self._score(item, scene_hint), item.use_count, item.id))
+        scene_candidates.sort(key=lambda item: (-self._score(item, scene_intent), item.use_count, item.id))
 
         candidate_limit = int(self._config_value("selection_candidate_limit_per_category", 12))
         candidates = outfit_candidates[:candidate_limit] + scene_candidates[:candidate_limit]
@@ -224,6 +258,8 @@ class ReferenceSelector:
                     temperature=self._config_value("temperature", 0.1),
                     max_tokens=self._config_value("max_tokens", 2048),
                 )
+                if not isinstance(selected, dict):
+                    raise ValueError("reference selection response must be an object")
                 selected_outfit_value = selected.get("outfit_id")
                 selected_outfit_is_null = "outfit_id" in selected and selected_outfit_value is None
                 selected_outfit = str(selected_outfit_value or "").strip()
@@ -258,7 +294,7 @@ class ReferenceSelector:
             scene = scene_candidates[0]
             reasons["scene"] = "score"
         if outfit is None and allow_outfit:
-            reasons["outfit"] = "text_fallback"
+            reasons["outfit"] = "probabilistic_text_fallback" if probabilistic_outfit_fallback else "text_fallback"
         elif not allow_outfit:
             reasons["outfit"] = "disabled"
         if scene is None and allow_scene and scene_eligible:
@@ -279,6 +315,21 @@ class ReferenceSelector:
 
 def _normalize_signature(value: str) -> str:
     return " ".join(str(value or "unspecified").casefold().split())
+
+
+def _intent_tokens(value: str) -> set[str]:
+    return {word.strip().casefold() for word in str(value or "").replace("，", ",").split(",") if word.strip()}
+
+
+def _combine_intent(*values: str) -> str:
+    return ", ".join(value.strip() for value in values if str(value or "").strip())
+
+
+def _normalized_asset_text(asset: ReferenceAsset) -> str:
+    values: list[str] = [asset.name]
+    values.extend(str(value) for value in asset.effective_tags.values())
+    values.extend(str(value) for value in asset.selection_metadata.values())
+    return " ".join(values).casefold()
 
 
 def _last_used_timestamp(asset: ReferenceAsset) -> float:

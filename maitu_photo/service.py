@@ -584,6 +584,7 @@ class PhotoStudioService:
                 "asset_id": asset_id.strip(),
                 "manual_tags": dict(manual_tags or {}),
                 "automatic": bool(automatic),
+                "automatic_backfill": bool(automatic and parent_task_id),
                 "origin": "automatic" if automatic else "qq",
                 "delivery": "qq",
                 "personality": personality.strip(),
@@ -1107,7 +1108,9 @@ class PhotoStudioService:
             scope_key=task.scope_key,
             description=description,
             outfit_hint="",
+            outfit_style=self.config.references.outfit_style,
             scene_hint=scene_hint,
+            scene_style=self.config.references.scene_style,
             explicit_outfit_id="",
             explicit_scene_id=str(payload.get("scene_id") or ""),
             force_new_outfit=True,
@@ -1204,7 +1207,9 @@ class PhotoStudioService:
             scope_key=task.scope_key,
             description=str(payload.get("description") or ""),
             outfit_hint=str(payload.get("outfit_hint") or ""),
+            outfit_style=self.config.references.outfit_style,
             scene_hint=str(payload.get("scene_hint") or ""),
+            scene_style=self.config.references.scene_style,
             explicit_outfit_id=str(payload.get("outfit_id") or ""),
             explicit_scene_id=str(payload.get("scene_id") or ""),
             force_new_outfit=bool(payload.get("force_new_outfit", False)),
@@ -1549,7 +1554,27 @@ class PhotoStudioService:
                 "replaces_asset_id": old_id if operation == "replace" and old_id else None,
             }
             if operation == "extract":
-                asset = await service.extract_reference(category, source, size=str(payload.get("size") or ""), **common)
+                extraction_prompt = ""
+                if bool(payload.get("automatic_backfill")):
+                    configured_style = (
+                        self.config.references.outfit_style
+                        if category == ReferenceCategory.OUTFIT
+                        else self.config.references.scene_style
+                    ).strip()
+                    if configured_style:
+                        extraction_prompt = (
+                            self.config.prompts.extract_outfit
+                            if category == ReferenceCategory.OUTFIT
+                            else self.config.prompts.extract_scene
+                        ) + f"\n自动补库目标风格：{configured_style}"
+                asset = await service.extract_reference(
+                    category,
+                    source,
+                    size=str(payload.get("size") or ""),
+                    automatic_backfill=bool(payload.get("automatic_backfill")),
+                    extraction_prompt=extraction_prompt,
+                    **common,
+                )
             else:
                 asset = await service.import_reference(category, source, **common)
         elif operation == "retag":
@@ -1781,6 +1806,14 @@ class PhotoStudioService:
                 compression=compression,
                 prompts=prompts,
                 auto_enable_generated_references=self.config.references.auto_enable_generated_references,
+                auto_review_generated_references=self.config.references.auto_review_generated_references,
+                review_min_confidence=self.config.references.review_min_confidence,
+                max_references={
+                    "person": self.config.references.max_person_references,
+                    "outfit": self.config.references.max_outfit_references,
+                    "scene": self.config.references.max_scene_references,
+                },
+                capacity_policy=self.config.references.capacity_policy,
                 tagging_task_name=self.config.model_tasks.tagging_task_name,
                 tagging_temperature=self.config.model_tasks.temperature,
                 tagging_max_tokens=self.config.model_tasks.max_tokens,
@@ -1958,6 +1991,9 @@ class PhotoStudioService:
         else:
             base = self.config.prompts.clothing_style_prompt
         extras: list[str] = []
+        configured_style = self.config.references.outfit_style.strip()
+        if configured_style:
+            extras.append(f"配置服装风格要求：{configured_style}")
         if hint:
             extras.append(f"用户服装提示：{hint}")
         if accessory_hint:
@@ -1969,6 +2005,9 @@ class PhotoStudioService:
             base = self.config.prompts.scene_reference_prompt.strip()
         else:
             base = self.prompts.render("scene_fallback_prompt", scene_hint=hint)
+        configured_style = self.config.references.scene_style.strip()
+        if configured_style:
+            base = "\n".join(part for part in (base, f"配置场景风格要求：{configured_style}") if part)
         return base or hint
 
     def _merge_task_metadata(self, task_id: str, **values: Any) -> ImageTask:
