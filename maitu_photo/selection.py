@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -80,6 +81,34 @@ class ReferenceSelector:
             return True
         searchable = _normalized_asset_text(asset)
         return any(token in searchable for token in tokens)
+
+    @staticmethod
+    def _matches_scene_intent(asset: ReferenceAsset, hint: str, style: str) -> bool:
+        """按房间类型和有效标签匹配场景，不要求拍摄描述整句相同。"""
+
+        tags = asset.effective_tags
+        searchable = " ".join(
+            [asset.name, *(str(value) for value in tags.values() if isinstance(value, (str, list, tuple)))]
+        )
+        asset_terms = _scene_terms(searchable)
+        # room_type 优先于名称/指纹，避免描述中的其它房间名称覆盖真实分类。
+        asset_rooms = _scene_terms(str(tags.get("room_type") or "")) & _SCENE_ROOM_ALIASES.keys()
+        if not asset_rooms:
+            asset_rooms = asset_terms & _SCENE_ROOM_ALIASES.keys()
+        for requirement, is_style in ((hint, False), (style, True)):
+            terms = _scene_terms(requirement)
+            rooms = terms & _SCENE_ROOM_ALIASES.keys()
+            if rooms and asset_rooms and not rooms & asset_rooms:
+                return False
+            # 配置风格独立于场景描述；匹配房间本身不能绕过风格要求。
+            if is_style:
+                terms -= _SCENE_ROOM_ALIASES.keys()
+                searchable_terms = asset_terms - _SCENE_ROOM_ALIASES.keys()
+            else:
+                searchable_terms = asset_terms
+            if terms and not any(_scene_term_matches(term, other) for term in terms for other in searchable_terms):
+                return False
+        return True
 
     async def select(
         self,
@@ -200,7 +229,11 @@ class ReferenceSelector:
                     reasons["outfit"] = decision.outfit_reason
             if allow_scene and scene_eligible and scene is None and decision.scene_id:
                 candidate = self.gallery.get(decision.scene_id)
-                if candidate and candidate.is_selectable and self._matches_intent(candidate, scene_intent):
+                if (
+                    candidate
+                    and candidate.is_selectable
+                    and self._matches_scene_intent(candidate, scene_hint, scene_style)
+                ):
                     scene = candidate
                     reasons["scene"] = decision.scene_reason
 
@@ -227,7 +260,7 @@ class ReferenceSelector:
             else [
                 item
                 for item in self.gallery.candidates("scene", include_disabled=False)
-                if item.id not in excluded_scenes and self._matches_intent(item, scene_intent)
+                if item.id not in excluded_scenes and self._matches_scene_intent(item, scene_hint, scene_style)
             ]
         )
         # Keep the original model-first strategy and deterministic ordering:
@@ -315,6 +348,52 @@ class ReferenceSelector:
 
 def _normalize_signature(value: str) -> str:
     return " ".join(str(value or "unspecified").casefold().split())
+
+
+_SCENE_ROOM_ALIASES = {
+    "bedroom": ("卧室", "睡房", "寝室", "bedroom", "bed room"),
+    "bathroom": ("浴室", "卫生间", "洗手间", "淋浴间", "bathroom", "bath room", "restroom", "washroom"),
+    "livingroom": ("客厅", "起居室", "living room", "livingroom", "lounge"),
+    "kitchen": ("厨房", "kitchen"),
+    "diningroom": ("餐厅", "饭厅", "dining room", "diningroom"),
+    "study": ("书房", "study room", "home office", "study"),
+    "balcony": ("阳台", "balcony"),
+}
+_SCENE_ROOM_PATTERNS = {
+    room: re.compile(
+        "|".join(
+            rf"(?<![a-z]){re.escape(alias)}(?![a-z])" if alias.isascii() else re.escape(alias)
+            for alias in sorted(aliases, key=len, reverse=True)
+        )
+    )
+    for room, aliases in _SCENE_ROOM_ALIASES.items()
+}
+_SCENE_STOP_WORDS = frozenset(
+    (
+        "a an the at by in on of to for from with and or near beside "
+        "photo scene reference board sheet room indoor private"
+    ).split()
+)
+
+
+def _scene_terms(value: str) -> set[str]:
+    """保留标签关键词，并把自然句中的中英文房间名称归一化。"""
+
+    normalized = re.sub(r"[_-]+", " ", value.casefold())
+    for room, pattern in _SCENE_ROOM_PATTERNS.items():
+        normalized = pattern.sub(f" {room} ", normalized)
+    return {
+        term
+        for term in re.findall(r"[a-z0-9]+|[\u4e00-\u9fff]+", normalized)
+        if len(term) > 1 and term not in _SCENE_STOP_WORDS
+    }
+
+
+def _scene_term_matches(first: str, second: str) -> bool:
+    # 中文标签可嵌在长句中；英文按词匹配，避免 room 等子串造成误命中。
+    return first == second or (
+        not first.isascii() and not second.isascii() and (first in second or second in first)
+    )
 
 
 def _intent_tokens(value: str) -> set[str]:

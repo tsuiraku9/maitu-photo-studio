@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maitu-photo-studio"
-version = "0.3.0"
+version = "0.3.1"
 description = "MaiBot realistic photo generation and reference gallery plugin"
 requires-python = ">=3.12"
 dependencies = [
