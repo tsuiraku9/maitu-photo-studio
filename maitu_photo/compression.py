@@ -22,11 +22,13 @@ from typing import BinaryIO, Union
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from .sizes import BYTES_PER_KB, MAX_REFERENCE_KB
+
 # Pillow's default can be changed by applications.  We do not change the
 # process-wide value, but still reject bomb warnings/errors while opening an
 # untrusted image.
 DEFAULT_TARGET_BYTES = 480_000
-HARD_MAX_TARGET_BYTES = 500_000
+HARD_MAX_TARGET_BYTES = MAX_REFERENCE_KB * BYTES_PER_KB
 DEFAULT_MAX_EDGE = 2048
 DEFAULT_MAX_QUALITY = 90
 DEFAULT_MIN_QUALITY = 55
@@ -50,13 +52,8 @@ class ImageTooLargeError(ImageCompressionError):
 
 
 @dataclass(frozen=True)
-class CompressionConfig:
-    """Configuration for :func:`compress_image`.
-
-    ``target_bytes`` is deliberately checked against the hard 500 KB ceiling;
-    allowing a larger value would make the gallery invariant dependent on a
-    caller's configuration typo.
-    """
+class ImageEncodingConfig:
+    """通用图片编码参数；图库入口另外校验自身的硬上限。"""
 
     target_bytes: int = DEFAULT_TARGET_BYTES
     max_edge: int = DEFAULT_MAX_EDGE
@@ -69,8 +66,8 @@ class CompressionConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.target_bytes, int) or isinstance(self.target_bytes, bool):
             raise ValueError("target_bytes must be an integer")
-        if self.target_bytes <= 0 or self.target_bytes > HARD_MAX_TARGET_BYTES:
-            raise ValueError(f"target_bytes must be between 1 and {HARD_MAX_TARGET_BYTES}")
+        if self.target_bytes <= 0 or self.target_bytes > DEFAULT_MAX_INPUT_BYTES:
+            raise ValueError(f"target_bytes must be between 1 and {DEFAULT_MAX_INPUT_BYTES}")
         if self.max_edge <= 0:
             raise ValueError("max_edge must be positive")
         if not 1 <= self.min_quality <= self.max_quality <= 95:
@@ -81,6 +78,16 @@ class CompressionConfig:
             raise ValueError("max_input_bytes must be positive")
         if self.max_pixels <= 0:
             raise ValueError("max_pixels must be positive")
+
+
+@dataclass(frozen=True)
+class CompressionConfig(ImageEncodingConfig):
+    """图库专用参数，入库文件始终不超过 500 KB（1 KB = 1024 B）。"""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.target_bytes > HARD_MAX_TARGET_BYTES:
+            raise ValueError(f"target_bytes must be between 1 and {HARD_MAX_TARGET_BYTES}")
 
 
 @dataclass(frozen=True)
@@ -274,7 +281,7 @@ def compress_image(
     """Normalize and compress ``source`` to a metadata-free JPEG.
 
     The output is guaranteed to be no larger than ``target_bytes`` (and never
-    larger than 500,000 bytes).  If the image cannot meet the limit after the
+    larger than 500 KB (512,000 bytes)).  If the image cannot meet the limit after the
     configured number of downscale passes, :class:`ImageTooLargeError` is
     raised instead of returning an oversized artifact.
     """
@@ -297,6 +304,15 @@ def compress_image(
         except ValueError as exc:
             raise ImageTooLargeError(str(exc)) from exc
 
+    if cfg.target_bytes > HARD_MAX_TARGET_BYTES:
+        raise ImageTooLargeError(f"target_bytes must not exceed {HARD_MAX_TARGET_BYTES}")
+    return encode_image(source, config=cfg)
+
+
+def encode_image(source: ImageSource, *, config: ImageEncodingConfig) -> CompressionResult:
+    """按指定预算编码静态 JPEG；发送与图库入口共用编码算法。"""
+
+    cfg = config
     data = _read_source(source, cfg.max_input_bytes)
     image, original_width, original_height = _open_normalized(data, cfg.max_pixels)
     original_size = len(data)

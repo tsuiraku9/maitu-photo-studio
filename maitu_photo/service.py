@@ -14,9 +14,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from .compression import CompressionConfig, CompressionResult
+from .compression import HARD_MAX_TARGET_BYTES, CompressionConfig, CompressionResult
 from .config import PhotoPluginConfig
 from .continuity import ContinuityManager, normalize_scene_signature
+from .delivery import DeliveryImage, delivery_policy, prepare_delivery_image
 from .gallery import DuplicateReferenceError, ReferenceGallery, ReferenceVersionConflictError, file_sha256
 from .llm_adapter import MaiBotLLMAdapter
 from .logging_utils import PluginEventLogger, diagnostic_error, redact_text
@@ -37,6 +38,7 @@ from .reference_service import (
 )
 from .runtime import InvocationContext, ReferenceJobContext
 from .selection import ReferenceSelector, SelectionResult
+from .sizes import kb_to_bytes
 from .storage import RecordNotFoundError, SQLiteStorage, StorageError
 from .task_manager import TaskManager
 
@@ -163,6 +165,8 @@ class PhotoStudioService:
         )
         self.payloads = TaskPayloadStore(self.data_dir)
         self._provider: OpenAICompatibleProvider | None = None
+        self._image_workers: set[asyncio.Task[Any]] = set()
+        self._closing = False
         # Gallery mutations share one lock across short-lived ReferenceService
         # instances. A separate job lock serializes reference operations (and
         # startup ingestion) without locking ordinary photo generation.
@@ -197,6 +201,7 @@ class PhotoStudioService:
 
     async def close(self) -> None:
         self.log.info("后台任务服务开始关闭")
+        self._closing = True
         scan_task = self._reference_scan_task
         self._reference_scan_task = None
         if scan_task is not None:
@@ -205,11 +210,28 @@ class PhotoStudioService:
             with contextlib.suppress(asyncio.CancelledError):
                 await scan_task
         await self.tasks.stop()
+        if self._image_workers:
+            await asyncio.gather(*self._image_workers, return_exceptions=True)
         if self._provider is not None:
             await self._provider.aclose()
             self._provider = None
         self.storage.close()
         self.log.info("后台任务服务已关闭")
+
+    async def run_image_work(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """跟踪图片工作线程，取消或配置热更新必须等其退出后再关闭 SQLite。"""
+
+        if self._closing:
+            raise PhotoStudioError("插件正在更新，请稍后重试")
+        work = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+        self._image_workers.add(work)
+        try:
+            return await asyncio.shield(work)
+        except asyncio.CancelledError:
+            await asyncio.gather(work, return_exceptions=True)
+            raise
+        finally:
+            self._image_workers.discard(work)
 
     async def wait_for_startup_reference_scan(self) -> dict[str, int]:
         """Wait for the one-shot startup gallery scan, primarily for diagnostics."""
@@ -877,13 +899,13 @@ class PhotoStudioService:
             if not self.config.output.include_image_in_status:
                 raise TaskAccessError("配置已禁止状态工具返回图片")
             if task.result_path and task.result_path.is_file():
-                data = task.result_path.read_bytes()
+                image = self.prepare_task_image(task)
                 result["content_items"] = [
                     {
                         "type": "image",
-                        "data": base64.b64encode(data).decode("ascii"),
-                        "mime_type": str(task.result_metadata.get("media_type") or "image/jpeg"),
-                        "name": task.result_path.name,
+                        "data": base64.b64encode(image.data).decode("ascii"),
+                        "mime_type": image.media_type,
+                        "name": f"{task.id}.jpg" if image.media_type == "image/jpeg" else task.result_path.name,
                         "description": f"任务 {task.id} 的生成结果",
                     }
                 ]
@@ -958,6 +980,7 @@ class PhotoStudioService:
                 self.payloads.delete_upload(task.id)
                 if task.result_path is not None:
                     task.result_path.unlink(missing_ok=True)
+                self._delivery_path(task.id).unlink(missing_ok=True)
                 if self.storage.delete_task(task.id):
                     deleted_tasks += 1
                 continue
@@ -968,6 +991,7 @@ class PhotoStudioService:
                 and children_finished
             ):
                 task.result_path.unlink(missing_ok=True)
+                self._delivery_path(task.id).unlink(missing_ok=True)
                 task.result_path = None
                 task.result_metadata["result_cleaned_at"] = current.isoformat()
                 self.storage.update_task(task)
@@ -1011,6 +1035,9 @@ class PhotoStudioService:
         parent_task_id: str | None = None,
     ) -> ImageTask:
         prompt = str(prompt_text or "").strip()
+        task_request = dict(request or {})
+        if kind in {"photo", "scene_photo", "image"}:
+            task_request["output_compression"] = delivery_policy(self.config.output)
         return ImageTask(
             kind=kind,
             scope_key=invocation.scope_key,
@@ -1020,7 +1047,7 @@ class PhotoStudioService:
             prompt_summary=_prompt_summary(prompt),
             prompt_hash=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             prompt_version=self._prompt_version(kind),
-            request=dict(request or {}),
+            request=task_request,
             parent_task_id=parent_task_id,
         )
 
@@ -1377,7 +1404,10 @@ class PhotoStudioService:
                     error_kind=_diagnostic_error(exc),
                 )
             return
-        image_base64 = base64.b64encode(task.result_path.read_bytes()).decode("ascii")
+        image = await self.run_image_work(self.prepare_task_image, task)
+        if self._task_cancelled(task.id):
+            return
+        image_base64 = base64.b64encode(image.data).decode("ascii")
         response = await self.ctx.send.image(image_base64, task.stream_id or "", return_details=True)
         sent = bool(response.get("sent")) if isinstance(response, Mapping) else bool(response)
         message_id = str(response.get("message_id") or "") if isinstance(response, Mapping) else ""
@@ -1654,7 +1684,7 @@ class PhotoStudioService:
         metadata = _mapping(payload.get("source_compression"))
         if task.request.get("origin") != "webui" or not metadata:
             return None
-        if metadata.get("sha256") != hashlib.sha256(data).hexdigest() or len(data) > 500_000:
+        if metadata.get("sha256") != hashlib.sha256(data).hexdigest() or len(data) > HARD_MAX_TARGET_BYTES:
             raise PhotoStudioError("任务上传图片校验失败")
         fields = (
             "sha256",
@@ -1779,7 +1809,7 @@ class PhotoStudioService:
         check_mutation: Callable[[], None] | None = None,
     ) -> ReferenceService:
         compression = CompressionConfig(
-            target_bytes=min(int(self.config.references.max_bytes), 480_000),
+            target_bytes=kb_to_bytes(self.config.references.max_kb),
             max_edge=int(self.config.references.max_edge),
             max_pixels=int(self.config.references.max_pixels),
         )
@@ -1842,7 +1872,7 @@ class PhotoStudioService:
                 extraction_model=self.config.openai.reference_model,
                 timeout=self.config.openai.request_timeout_seconds,
                 connect_timeout=self.config.openai.connect_timeout_seconds,
-                max_response_bytes=self.config.openai.max_response_bytes,
+                max_response_bytes=kb_to_bytes(self.config.openai.max_response_kb),
                 max_retries=self.config.openai.generation_max_retries,
                 retry_backoff_seconds=self.config.openai.generation_retry_backoff_seconds,
                 logger=self.log,
@@ -1964,6 +1994,51 @@ class PhotoStudioService:
                     error_kind=_diagnostic_error(exc),
                 )
 
+    def _delivery_path(self, task_id: str) -> Path:
+        if not re.fullmatch(r"[0-9a-f]{32}", task_id):
+            raise PhotoStudioError("任务 ID 无效")
+        return self.results_dir / f"{task_id}.delivery.jpg"
+
+    def prepare_image(self, path: Path, media_type: str = "image/jpeg") -> DeliveryImage:
+        """管理员参考图使用当前设置，调用方需在工作线程执行。"""
+
+        return prepare_delivery_image(path.read_bytes(), media_type, delivery_policy(self.config.output))
+
+    def prepare_task_image(self, task: ImageTask) -> DeliveryImage:
+        """按入队快照准备投递图；仅操作已生成结果，绝不调用模型。"""
+
+        if task.result_path is None or not task.result_path.is_file():
+            raise PhotoStudioError("生成结果文件不存在")
+        policy = task.request.get("output_compression", {"enabled": False})
+        data = task.result_path.read_bytes()
+        media_type = str(task.result_metadata.get("media_type") or "image/jpeg")
+        source_hash = hashlib.sha256(data).hexdigest()
+        cached = task.result_metadata.get("output_image", {})
+        output_path = self._delivery_path(task.id)
+        if cached.get("source_sha256") == source_hash and cached.get("policy") == policy:
+            if not cached.get("compressed"):
+                return DeliveryImage(data, str(cached.get("media_type") or media_type), cached)
+            if cached.get("compressed") and output_path.is_file():
+                encoded = output_path.read_bytes()
+                if hashlib.sha256(encoded).hexdigest() == cached.get("sha256"):
+                    return DeliveryImage(encoded, "image/jpeg", cached)
+        try:
+            image = prepare_delivery_image(data, media_type, policy)
+        except ValueError:
+            self._merge_task_metadata(task.id, compression_failed=True)
+            raise
+        metadata = {
+            **image.metadata,
+            "policy": dict(policy),
+            "source_sha256": source_hash,
+            "sha256": hashlib.sha256(image.data).hexdigest(),
+            "media_type": image.media_type,
+        }
+        if image.metadata["compressed"]:
+            TaskPayloadStore._atomic_write(output_path, image.data)
+        self._merge_task_metadata(task.id, output_image=metadata, compression_failed=False)
+        return DeliveryImage(image.data, image.media_type, metadata)
+
     def _save_result(self, task_id: str, generated: GeneratedImage) -> Path:
         suffix = {
             "image/png": ".png",
@@ -2011,11 +2086,12 @@ class PhotoStudioService:
         return base or hint
 
     def _merge_task_metadata(self, task_id: str, **values: Any) -> ImageTask:
-        task = self.storage.get_task(task_id)
-        if task is None:
-            raise RecordNotFoundError(f"task not found: {task_id}")
-        task.result_metadata.update(values)
-        return self.storage.update_task(task)
+        with self.storage.transaction():
+            task = self.storage.get_task(task_id)
+            if task is None:
+                raise RecordNotFoundError(f"task not found: {task_id}")
+            task.result_metadata.update(values)
+            return self.storage.update_task(task)
 
     def _task_cancelled(self, task_id: str) -> bool:
         current = self.storage.get_task(task_id)

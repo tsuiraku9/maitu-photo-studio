@@ -4,8 +4,8 @@
   "workspace_title": "麦麦写真",
   "pages": [
     {
-      "id": "gallery", "title": "参考图库", "description": "人物、服装和场景参考素材。上传只暂存，提交后才会调用模型。",
-      "placement": "workspace", "icon": "database", "mode": "custom", "entry": "webui/gallery.html", "layout": "document",
+      "id": "gallery", "title": "麦麦写真", "description": "参考图库与全部持久任务，在页内切换查看。",
+      "placement": "sidebar", "icon": "puzzle", "mode": "custom", "entry": "webui/gallery.html", "layout": "document",
       "queries": {
         "gallery": {
           "api": "webui_gallery_query", "version": "1",
@@ -26,10 +26,12 @@
         "tasks": {
           "api": "webui_task_query", "version": "1",
           "parameters": {
-            "operation": {"type": "string", "choices": ["list", "detail", "receipt"]},
+            "operation": {"type": "string", "choices": ["list", "detail", "receipt", "image"]},
             "args": {"type": "object", "properties": {
               "status": {"type": "string", "choices": ["", "queued", "running", "generated", "completed", "sent", "failed", "cancelled"]},
               "origin": {"type": "string", "choices": ["", "webui", "qq", "automatic", "startup", "unknown"]},
+              "kind": {"type": "string", "choices": ["", "photo", "scene_photo", "image", "reference", "notification_retry"]},
+              "created_after": {"type": "string", "max_length": 64}, "created_before": {"type": "string", "max_length": 64},
               "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 24},
               "task_id": {"type": "string", "max_length": 128}, "request_id": {"type": "string", "max_length": 128}
             }}
@@ -40,7 +42,7 @@
         "manage": {
           "api": "webui_gallery_action", "version": "1",
           "parameters": {
-            "operation": {"type": "string", "required": true, "choices": ["edit", "enable", "disable", "delete", "confirm", "prepare_preview", "submit", "cancel", "retry"]},
+            "operation": {"type": "string", "required": true, "choices": ["edit", "enable", "disable", "delete", "confirm", "prepare_preview", "submit", "cancel", "retry", "prepare_task_preview"]},
             "request_id": {"type": "string", "required": true, "max_length": 128},
             "confirm_token": {"type": "string", "max_length": 4000},
             "args": {"type": "object", "required": true, "properties": {
@@ -100,40 +102,6 @@
         }
       },
       "uploads": {"library": {"action": "stage", "image_max_edge": 2048}}
-    },
-    {
-      "id": "tasks", "title": "管理任务", "description": "仅网页发起的任务可取消或重试；其它来源只读。模型已开始的费用不会因取消而退回。",
-      "placement": "workspace", "icon": "list", "mode": "custom", "entry": "webui/tasks.html", "layout": "document",
-      "queries": {
-        "tasks": {
-          "api": "webui_task_query", "version": "1",
-          "parameters": {
-            "operation": {"type": "string", "choices": ["list", "detail", "receipt"]},
-            "args": {"type": "object", "properties": {
-              "status": {"type": "string", "choices": ["", "queued", "running", "generated", "completed", "sent", "failed", "cancelled"]},
-              "origin": {"type": "string", "choices": ["", "webui", "qq", "automatic", "startup", "unknown"]},
-              "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 24},
-              "task_id": {"type": "string", "max_length": 128}, "request_id": {"type": "string", "max_length": 128}
-            }}
-          }
-        }
-      },
-      "actions": {
-        "manage": {
-          "api": "webui_gallery_action", "version": "1",
-          "parameters": {
-            "operation": {"type": "string", "required": true, "choices": ["confirm", "cancel", "retry"]},
-            "request_id": {"type": "string", "required": true, "max_length": 128},
-            "confirm_token": {"type": "string", "max_length": 4000},
-            "args": {"type": "object", "required": true, "properties": {
-              "task_id": {"type": "string", "max_length": 128},
-              "action": {"type": "string", "choices": ["retry"]}, "target_request_id": {"type": "string", "max_length": 128},
-              "params": {"type": "object", "properties": {"task_id": {"type": "string", "required": true, "max_length": 128}}}
-            }}
-          }
-        }
-      },
-      "uploads": {}
     }
   ]
 }

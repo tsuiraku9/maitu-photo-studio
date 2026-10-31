@@ -4,8 +4,8 @@
 <body>
 <main class="app">
   <header class="page-heading">
-    <div><h1>参考图库</h1><p class="muted">管理人物、服装与场景参考素材。原有 QQ 命令保留；网页不会自动发起模型请求。</p></div>
-    <nav class="nav" aria-label="工作区页面"><button type="button" aria-current="page" disabled>参考图库</button><button id="nav-tasks" type="button" data-navigation>管理任务</button></nav>
+    <div><p class="eyebrow">麦麦写真 · 参考素材</p><h1>参考图库</h1><p class="muted">管理人物、服装与场景参考素材。原有 QQ 命令保留；网页不会自动发起模型请求。</p></div>
+    <nav class="nav" aria-label="工作区页面"><button type="button" aria-current="page" disabled>参考图库</button><button id="nav-tasks" type="button" data-navigation>任务列表</button></nav>
   </header>
   <div id="notice" class="note notice" hidden><span id="notice-text"></span><button id="notice-close" type="button" aria-label="关闭提示">关闭</button></div>
   <p id="busy-label" class="busy-label" role="status" aria-live="polite">等待宿主连接…</p>
@@ -51,7 +51,7 @@
 <dialog id="upload-dialog" aria-labelledby="upload-title">
   <div class="dialog-header"><h2 id="upload-title">上传图片</h2><button id="upload-close" type="button">关闭</button></div>
   <div class="dialog-body">
-    <p class="note">第一步只上传并暂存，不调用模型；第二步提交才会处理图片。请先编辑名称。JPEG、PNG、WebP，每张源文件最多 64 MiB，宿主将上传副本最长边缩到 2048 像素。</p>
+    <p class="note">第一步只上传并暂存，不调用模型；第二步提交才会处理图片。请先编辑名称。JPEG、PNG、WebP，每张源文件最多 65536 KB，宿主将上传副本最长边缩到 2048 像素。</p>
     <div class="form-grid"><div class="field"><label for="upload-category">目标类别</label><select id="upload-category"><option value="outfit">服装</option><option value="scene">场景</option><option value="person">人物（单张）</option></select></div><div class="field"><label for="upload-operation">处理方式</label><select id="upload-operation"><option value="import">导入已有参考图</option><option value="extract">提取并生成参考板</option><option value="replace" hidden>替换已有参考图</option></select></div></div>
     <p id="upload-risk" class="note"></p>
     <div class="field"><label for="upload-files">选择图片（最多 20 张；人物单张）</label><input id="upload-files" type="file" accept="image/jpeg,image/png,image/webp" multiple></div>

@@ -13,11 +13,12 @@ from typing import Any, Mapping
 
 from PIL import Image
 
-from .compression import CompressionConfig, CompressionResult, compress_image
+from .compression import HARD_MAX_TARGET_BYTES, CompressionConfig, CompressionResult, compress_image
 from .gallery import GalleryError, ReferenceNotFoundError, ReferenceNotSelectableError, ReferenceVersionConflictError
 from .gallery_management import GalleryManagement
 from .models import ImageTask, ReferenceAsset, ReferenceCategory, TaskStatus
 from .reference_service import ReferenceTagValidationError, validate_reference_tags
+from .sizes import kb_to_bytes
 from .storage import StorageError
 from .webui_images import WebUIImages
 
@@ -152,17 +153,26 @@ class PhotoWebUI:
     async def task_query(self, operation: str = "list", args: Mapping[str, Any] | None = None) -> dict[str, Any]:
         args = self._args(args)
         if operation == "list":
-            self._keys(args, {"origin", "status", "offset", "limit"})
-            tasks, total = self.storage.query_reference_tasks(
+            self._keys(
+                args, {"origin", "status", "kind", "task_id", "created_after", "created_before", "offset", "limit"}
+            )
+            tasks, total = self.storage.query_tasks(
                 origin=_text(args.get("origin", "")),
                 status=_text(args.get("status", "")),
+                kind=_text(args.get("kind", "")),
+                task_id=_text(args.get("task_id", "")),
+                created_after=_text(args.get("created_after", "")),
+                created_before=_text(args.get("created_before", "")),
                 offset=self._int(args.get("offset", 0), 0, 1_000_000),
                 limit=self._int(args.get("limit", 12), 1, 24),
             )
             return _budget({"items": [self._task_data(task) for task in tasks], "total": total})
         if operation == "detail":
             self._keys(args, {"task_id"})
-            return {"task": self._task_data(self._reference_task(_asset_id(args.get("task_id"))))}
+            return _budget({"task": self._task_data(self._task(_asset_id(args.get("task_id"))), detail=True)})
+        if operation == "image":
+            self._keys(args, {"task_id"})
+            return self.images.query_task(self._task(_asset_id(args.get("task_id"))))
         if operation == "receipt":
             self._keys(args, {"request_id"})
             receipt = self.storage.get_request(_request_id(args.get("request_id")))
@@ -226,6 +236,11 @@ class PhotoWebUI:
         async with self._lock:
             if operation == "confirm":
                 return self._confirm(args)
+            if operation == "prepare_task_preview":
+                self._keys(args, {"task_id"})
+                task = self._task(_asset_id(args.get("task_id")))
+                await asyncio.to_thread(self.images.prepare_task, task)
+                return {"success": True}
             if operation == "prepare_preview":
                 self._keys(args, {"asset_ids", "variant"})
                 ids = self._ids(args.get("asset_ids"), maximum=6)
@@ -496,11 +511,13 @@ class PhotoWebUI:
     def _ensure_idle(self, asset_id: str) -> None:
         self.service.ensure_reference_idle(asset_id)
 
-    def _task_data(self, task: ImageTask) -> dict[str, Any]:
+    def _task_data(self, task: ImageTask, *, detail: bool = False) -> dict[str, Any]:
         origin = task.request.get("origin") or (
             "automatic" if task.request.get("automatic") else "qq" if task.stream_id else "unknown"
         )
-        webui = origin == "webui" and task.request.get("delivery") == "none"
+        reference = task.kind.startswith("reference_")
+        photo = task.kind in {"photo", "scene_photo", "image"}
+        webui = reference and origin == "webui" and task.request.get("delivery") == "none"
         retry_payload_available = False
         if webui and task.status in {TaskStatus.FAILED, TaskStatus.CANCELLED}:
             try:
@@ -510,16 +527,38 @@ class PhotoWebUI:
                 )
             except (RuntimeError, OSError, ValueError):
                 pass
-        return {
+        output = task.result_metadata.get("output_image", {})
+        result_available = bool(task.result_path and task.result_path.is_file())
+        image_sent = bool(task.result_metadata.get("image_sent") or (photo and task.status == TaskStatus.SENT))
+        result = {
             "task_id": task.id,
             "id": task.id,
             "kind": task.kind,
             "operation": task.request.get("operation", task.kind.removeprefix("reference_")),
             "origin": origin,
-            "status": "completed" if task.status == TaskStatus.SENT else task.status.value,
+            "status": "completed" if not photo and task.status == TaskStatus.SENT else task.status.value,
+            "parent_task_id": task.parent_task_id or "",
+            "result_available": result_available,
+            "result_cleaned": bool(task.result_metadata.get("result_cleaned_at")),
+            "delivery_status": "none"
+            if not photo or task.request.get("delivery") == "none"
+            else ("sent" if image_sent else "failed" if task.result_metadata.get("delivery_failed") else "pending"),
+            "planner_notified": bool(task.planner_notified_at),
+            "notification_failed": bool(task.result_metadata.get("notification_error")),
+            "output_image": {
+                key: output[key]
+                for key in ("enabled", "compressed", "original_kb", "size_kb", "width", "height", "format")
+                if key in output
+            },
             "asset_id": task.result_metadata.get("asset_id", ""),
             "asset_status": task.result_metadata.get("asset_status", ""),
-            "error": "参考作业处理失败，请检查插件日志；重新提交可能重复计费" if task.error_message else "",
+            "error": (
+                "发送图片压缩失败，生成原图已保留；请检查压缩限制并在原入口处理"
+                if task.result_metadata.get("compression_failed")
+                else "任务处理失败，请检查插件日志；重新提交可能重复计费"
+            )
+            if task.error_message and task.status != TaskStatus.CANCELLED
+            else "",
             "created_at": task.created_at.isoformat(),
             "updated_at": task.updated_at.isoformat(),
             "batch_id": task.request.get("batch_id", ""),
@@ -528,6 +567,18 @@ class PhotoWebUI:
             "can_cancel": webui and not task.terminal,
             "can_retry": retry_payload_available,
         }
+        if detail:
+            result["references"] = [
+                {"role": item.role, "asset_id": item.asset_id or "", "source": item.selection_source}
+                for item in self.storage.list_task_references(task.id)
+            ]
+        return result
+
+    def _task(self, task_id: str) -> ImageTask:
+        task = self.storage.get_task(task_id)
+        if task is None:
+            raise ValueError("任务不存在或已按保留策略清理")
+        return task
 
     def _reference_task(self, task_id: str) -> ImageTask:
         task = self.storage.get_task(task_id)
@@ -548,7 +599,7 @@ class PhotoWebUI:
         if metadata["expires_at"] < time.time():
             raise ValueError("上传暂存已过期，请重新上传")
         data = image.read_bytes()
-        if len(data) > 500_000 or hashlib.sha256(data).hexdigest() != metadata["compression"]["sha256"]:
+        if len(data) > HARD_MAX_TARGET_BYTES or hashlib.sha256(data).hexdigest() != metadata["compression"]["sha256"]:
             raise ValueError("暂存图片校验失败")
         return data, metadata["compression"]
 
@@ -593,7 +644,7 @@ class PhotoWebUI:
     def _compression(self) -> CompressionConfig:
         settings = self.service.config.references
         return CompressionConfig(
-            target_bytes=settings.max_bytes,
+            target_bytes=kb_to_bytes(settings.max_kb),
             max_edge=settings.max_edge,
             max_pixels=min(settings.max_pixels, 40_000_000),
             max_input_bytes=20 * 1024 * 1024,

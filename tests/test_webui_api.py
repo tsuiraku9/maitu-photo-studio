@@ -10,9 +10,11 @@ import hashlib
 import io
 import json
 import logging
+import random
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,7 +24,7 @@ import pytest
 from PIL import Image
 
 from maitu_photo.config import PhotoPluginConfig
-from maitu_photo.models import AssetStatus, ImageTask, ReferenceAsset, TaskReference, TaskStatus
+from maitu_photo.models import AssetStatus, ImageTask, ReferenceAsset, TaskReference, TaskStatus, utc_now
 from maitu_photo.provider import GeneratedImage
 from maitu_photo.service import PhotoStudioService
 from maitu_photo.storage import StorageError
@@ -262,12 +264,29 @@ async def test_wrapped_claim_is_hash_checked_normalized_and_cleaned_without_mode
         assert image.format == "JPEG" and getattr(image, "n_frames", 1) == 1
     metadata = json.loads(staged_metadata.read_text())
     assert hashlib.sha256(staged_image.read_bytes()).hexdigest() == metadata["compression"]["sha256"]
-    assert staged_image.stat().st_size <= env.config.references.max_bytes
+    assert staged_image.stat().st_size <= env.config.references.max_kb * 1024
     receipt = env.service.storage.get_request(request_id)
     assert receipt["state"] == "completed" and receipt["task_id"] is None
     assert receipt["response"] == response
     assert env.service.storage.list_tasks() == []
     _assert_private(response, env)
+    env.assert_no_models_or_delivery()
+
+
+async def test_reference_500_kb_survives_upload_stage_and_task_source_validation(env: _Environment) -> None:
+    env.config.references.max_kb = 500
+    image = Image.frombytes("RGB", (1024, 1024), random.Random(42).randbytes(1024 * 1024 * 3))
+    source = io.BytesIO()
+    image.save(source, "PNG")
+    upload_id, _ = env.upload(source.getvalue())
+    request_id = _id()
+    await env.api.stage_upload(upload_id, request_id)
+    data, metadata = env.api._stage(request_id)
+    # 覆盖旧的 500000 B 限制与新的 500 KB 上限之间的有效图片。
+    assert 500_000 < len(data) <= 500 * 1024
+    task = ImageTask(kind="reference_import", scope_key="webui", request={"origin": "webui"})
+    prepared = env.service._prepared_reference_source(task, {"source_compression": metadata}, data)
+    assert prepared is not None and prepared.data == data
     env.assert_no_models_or_delivery()
 
 
@@ -1107,4 +1126,82 @@ async def test_confirmation_does_not_mutate_receipts_and_unknown_preparing_is_no
         await env.api.action("submit", request_id, args)
     assert env.service.storage.list_tasks() == []
     assert env.service.storage.get_request(request_id)["state"] == "preparing"
+    env.assert_no_models_or_delivery()
+
+
+async def test_all_task_types_filters_and_delivery_states_are_visible_read_only(env: _Environment) -> None:
+    now = utc_now()
+    records = []
+    for kind in ("photo", "scene_photo", "image", "reference_import", "notification_retry"):
+        records.append(
+            env.service.storage.create_task(
+                ImageTask(
+                    kind=kind,
+                    scope_key="private-scope",
+                    stream_id="private-stream",
+                    status="sent",
+                    created_at=now,
+                    request={"api_key": SECRET},
+                    result_metadata={
+                        "image_sent": kind == "photo",
+                        "notification_error": SECRET,
+                        "private_path": str(env.root),
+                    },
+                )
+            )
+        )
+    before = env.service.storage.connection.total_changes
+    result = await env.api.task_query("list", {"limit": 2})
+    assert result["total"] == 5 and len(result["items"]) == 2
+    for record in records:
+        detail = (await env.api.task_query("detail", {"task_id": record.id}))["task"]
+        assert not detail["can_cancel"] and not detail["can_retry"]
+        assert detail["status"] == ("sent" if record.kind in {"photo", "scene_photo", "image"} else "completed")
+        assert detail["delivery_status"] == ("sent" if record.kind in {"photo", "scene_photo", "image"} else "none")
+        _assert_private(detail, env)
+    assert (await env.api.task_query("list", {"kind": "scene_photo"}))["total"] == 2
+    assert (await env.api.task_query("list", {"status": "sent"}))["total"] == 3
+    assert (await env.api.task_query("list", {"status": "completed"}))["total"] == 2
+    assert (await env.api.task_query("list", {"task_id": records[0].id[:12]}))["total"] == 1
+    assert (
+        await env.api.task_query(
+            "list",
+            {
+                "created_after": (now - timedelta(seconds=1)).isoformat(),
+                "created_before": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+    )["total"] == 5
+    assert (await env.api.task_query("list", {"created_after": (now + timedelta(seconds=1)).isoformat()}))["total"] == 0
+    with pytest.raises(ValueError):
+        await env.api.task_query("list", {"created_after": "invalid"})
+    assert env.service.storage.connection.total_changes == before
+    env.assert_no_models_or_delivery()
+
+
+async def test_task_result_preview_has_budget_and_expires_with_original(env: _Environment) -> None:
+    source = env.service.results_dir / "synthetic.png"
+    source.write_bytes(_png())
+    task = env.service.storage.create_task(ImageTask(kind="photo", scope_key="qq", result_path=source))
+    assert await env.api.task_query("image", {"task_id": task.id}) == {"ready": False, "available": True}
+    await env.api.action("prepare_task_preview", _id(), {"task_id": task.id})
+    before = env.service.storage.connection.total_changes
+    result = await env.api.task_query("image", {"task_id": task.id})
+    assert result["ready"] and result["data_url"].startswith("data:image/jpeg;base64,")
+    assert len(json.dumps(result).encode()) < 480_000
+    assert env.service.storage.connection.total_changes == before
+    source.unlink()
+    assert await env.api.task_query("image", {"task_id": task.id}) == {"ready": False, "available": False}
+    env.assert_no_models_or_delivery()
+
+
+async def test_task_preview_rejects_outside_files_and_symlinks(env: _Environment) -> None:
+    outside = env.root / "outside.png"
+    outside.write_bytes(_png())
+    for source in (outside, env.service.results_dir / "symlink.png"):
+        if source != outside:
+            source.symlink_to(outside)
+        task = env.service.storage.create_task(ImageTask(kind="photo", scope_key="qq", result_path=source))
+        with pytest.raises(ValueError):
+            await env.api.action("prepare_task_preview", _id(), {"task_id": task.id})
     env.assert_no_models_or_delivery()

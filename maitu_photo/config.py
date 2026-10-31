@@ -13,6 +13,8 @@ import re
 import string
 from typing import Any, Literal
 
+from .sizes import MAX_REFERENCE_KB, kb_to_bytes
+
 try:  # pragma: no cover - exercised in the real MaiBot runner
     from maibot_sdk import Field, PluginConfigBase
     from pydantic import field_validator, model_validator
@@ -101,7 +103,7 @@ class PluginSection(PluginConfigBase):
     __ui_label__ = "插件与权限"
     __ui_icon__ = "photo_camera"
     config_version: str = Field(
-        default="1.8.0",
+        default="1.9.2",
         description="插件配置版本",
         json_schema_extra=_ui("配置版本", "用于配置迁移，请勿手动修改。"),
     )
@@ -244,11 +246,17 @@ class OpenAISection(PluginConfigBase):
         description="HTTP 建连超时（秒）",
         json_schema_extra=_ui("连接超时（秒）", "连接生图服务的最长等待时间。"),
     )
-    max_response_bytes: int = Field(
-        default=32 * 1024 * 1024,
-        description="允许下载的单张结果上限",
-        json_schema_extra=_ui("响应图片上限（字节）", "超过此大小的单张结果会被拒绝下载。"),
+    max_response_kb: float = Field(
+        default=32768.0,
+        description="允许下载的单张结果上限（KB）",
+        json_schema_extra=_ui("响应图片上限（KB）", "1 KB = 1024 B；超过此大小的单张结果会被拒绝下载。", step=0.01),
     )
+
+    @field_validator("max_response_kb", mode="before")
+    @classmethod
+    def _validate_response_size(cls, value: Any) -> Any:
+        kb_to_bytes(value)
+        return value
 
     generation_max_retries: int = Field(
         default=0,
@@ -485,11 +493,25 @@ class ReferenceSection(PluginConfigBase):
             "reject：不再新增；evict_automatic：仅淘汰最旧且未被当前任务/连续性使用的自动补库参考图后新增，人工上传或手动生成的参考图永不自动淘汰。",
         ),
     )
-    max_bytes: int = Field(
-        default=480_000,
-        description="参考图硬上限（字节，不得超过 500000）",
-        json_schema_extra=_ui("参考图大小上限（字节）", "入库压缩后的硬上限，不得超过 500000。"),
+    max_kb: float = Field(
+        default=468.75,
+        le=MAX_REFERENCE_KB,
+        description="每张参考图压缩后的最大文件大小（KB）",
+        json_schema_extra=_ui(
+            "参考图大小上限（KB）",
+            "入库时自动压缩到此大小以内，最大 500 KB。数值越小，文件越小，细节可能减少；1 KB = 1024 B。",
+            step=0.01,
+        ),
     )
+
+    @field_validator("max_kb", mode="before")
+    @classmethod
+    def _validate_reference_size(cls, value: Any) -> Any:
+        kb_to_bytes(value)
+        if value > MAX_REFERENCE_KB:
+            raise ValueError("参考图大小上限不能超过 500 KB")
+        return value
+
     max_edge: int = Field(
         default=2048,
         description="参考图最长边上限",
@@ -537,8 +559,6 @@ class ReferenceSection(PluginConfigBase):
         return value
 
     def model_post_init(self, __context: Any) -> None:
-        if not 1 <= self.max_bytes <= 500_000:
-            raise ValueError("参考图大小上限必须位于 1..500000 字节")
         if self.max_edge < 1:
             raise ValueError("参考图最长边必须大于 0")
 
@@ -607,6 +627,23 @@ class OutputSection(PluginConfigBase):
 
     __ui_label__ = "投递与 Planner"
     __ui_icon__ = "send"
+    image_max_kb: float = Field(
+        default=1024.0,
+        description="发送图片的大小上限（KB），超过时自动压缩",
+        json_schema_extra=_ui(
+            "发送图片大小上限（KB）",
+            "1 KB = 1024 B；不超过上限时原样发送，超过时自动降低 JPEG 质量并按需缩小尺寸，保留生成原图。",
+            step=0.01,
+        ),
+    )
+
+    @field_validator("image_max_kb", mode="before")
+    @classmethod
+    def _validate_delivery_size(cls, value: Any) -> Any:
+        if kb_to_bytes(value) > 100 * 1024 * 1024:
+            raise ValueError("发送图片大小上限不能超过 102400 KB")
+        return value
+
     notify_planner: bool = Field(
         default=True,
         description="图片投递后是否唤起 Planner",

@@ -256,7 +256,7 @@ def test_prepared_reference_import_does_not_require_openai_provider(tmp_path: Pa
 
         assert service._provider is None
         assert asset.status.value == "active"
-        assert asset.reference_path.stat().st_size <= config.references.max_bytes
+        assert asset.reference_path.stat().st_size <= config.references.max_kb * 1024
         await service.close()
 
     asyncio.run(scenario())
@@ -691,7 +691,7 @@ def test_photo_reference_order_and_same_scene_outfit_continuity(tmp_path: Path) 
             ReferenceCategory.OUTFIT,
             outfit_bytes,
             {
-                "type": "dress",
+                "type": "casual summer dress",
                 "wearing_scenes": ["home"],
                 "seasons": ["summer"],
                 "styles": ["casual"],

@@ -13,6 +13,7 @@ from typing import Any
 
 from .compression import CompressionConfig, compress_image
 from .gallery import ReferenceGallery
+from .models import ImageTask
 
 
 class WebUIImages:
@@ -75,6 +76,62 @@ class WebUIImages:
             raise ValueError("参考图 ID 无效")
         for path in self.root.glob(f"{asset_id}-*.jpg"):
             path.unlink(missing_ok=True)
+
+    def _task_paths(self, task: ImageTask) -> tuple[Path, Path]:
+        """来源仅取数据库结果，拒绝越界与所有层级的符号链接。"""
+
+        if not re.fullmatch(r"[0-9a-f]{32}", task.id) or task.result_path is None:
+            raise ValueError("任务结果不可用")
+        source = Path(task.result_path)
+        resolved = source.resolve()
+        resolved.relative_to(self.data_dir)
+        current = self.data_dir
+        for part in source.absolute().relative_to(self.data_dir).parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError("不能预览符号链接图片")
+        stat = resolved.stat()
+        key = hashlib.sha256(f"{stat.st_mtime_ns}:{stat.st_size}".encode()).hexdigest()
+        return resolved, self.root / f"task-{task.id}-{key}.jpg"
+
+    def prepare_task(self, task: ImageTask) -> None:
+        source, target = self._task_paths(task)
+        if target.is_file():
+            return
+        result = compress_image(source, config=CompressionConfig(target_bytes=250_000, max_edge=1600))
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=self.root, suffix=".tmp", delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(result.data)
+            os.replace(temporary, target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        # 预览可清理，限制任务缓存数量并保留每个任务的最新版本。
+        for old in self.root.glob(f"task-{task.id}-*.jpg"):
+            if old != target:
+                old.unlink(missing_ok=True)
+        previews = sorted(self.root.glob("task-*.jpg"), key=lambda path: path.stat().st_mtime, reverse=True)
+        for old in previews[64:]:
+            old.unlink(missing_ok=True)
+
+    def query_task(self, task: ImageTask) -> dict[str, Any]:
+        """查询只读缓存，原图到期后不继续展示旧缓存。"""
+
+        if task.result_path is None or not task.result_path.is_file():
+            return {"ready": False, "available": False}
+        _, target = self._task_paths(task)
+        if not target.is_file():
+            return {"ready": False, "available": True}
+        data = target.read_bytes()
+        if len(data) > 250_000:
+            raise ValueError("预览缓存超过响应预算")
+        return {
+            "ready": True,
+            "available": True,
+            "data_url": "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii"),
+        }
 
     def query(self, asset_ids: list[str], variant: str = "thumbnail") -> dict[str, Any]:
         """只读缓存；缺失缓存由 prepare action 建立，不在 query 中写入。"""

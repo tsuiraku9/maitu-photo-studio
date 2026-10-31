@@ -1,3 +1,4 @@
 include _manifest.json webui.json README.md CHANGELOG.md LICENSE requirements.txt
 recursive-include webui *.html *.css *.js
 include scripts/build_webui.py
+include scripts/migrate_config_v040.py

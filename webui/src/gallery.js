@@ -128,7 +128,7 @@
     void loadThumbnails(generation, imageNodes);
   }
   async function loadThumbnails(generation, nodes) {
-    const current = () => generation === listGeneration && document.visibilityState !== "hidden";
+    const current = () => generation === listGeneration && U.activeView === "gallery" && document.visibilityState !== "hidden";
     const snapshot = [...items];
     const showImages = (ids, received) => {
       for (const id of ids) {
@@ -416,7 +416,7 @@
       }
       let accepted = 0;
       for (const item of signedItems) {
-        if (document.visibilityState === "hidden") throw new Error("页面已隐藏，未提交的后续任务已停止。已提交任务可在管理任务中查看。");
+        if (document.visibilityState === "hidden") throw new Error("页面已隐藏，未提交的后续任务已停止。已提交任务可在任务列表中查看。");
         const result = await U.action("submit", withoutRequestId(item), item.request_id, token);
         accepted += 1;
         U.notify(`已受理 ${accepted}/${signedItems.length} 项${result.task_id ? `，最近任务号：${result.task_id}` : ""}。`);
@@ -467,7 +467,7 @@
     const limit = category === "person" || uploads.replacement ? 1 : maxBatch();
     if (files.length + uploads.rows.length > limit) { U.notify(`此操作最多选择 ${limit} 张图片；未追加文件。`, true); $("upload-files").value = ""; return; }
     for (const file of files) {
-      if (!file.size || file.size > 64 * 1024 * 1024 || file.name.length > 512 || !["", "image/jpeg", "image/png", "image/webp"].includes(file.type) || (file.type === "" && !/\.(?:jpe?g|png|webp)$/i.test(file.name))) { U.notify(`「${file.name}」不符合图片格式或 64 MiB 限制；本次未追加文件。`, true); $("upload-files").value = ""; return; }
+      if (!file.size || file.size > 64 * 1024 * 1024 || file.name.length > 512 || !["", "image/jpeg", "image/png", "image/webp"].includes(file.type) || (file.type === "" && !/\.(?:jpe?g|png|webp)$/i.test(file.name))) { U.notify(`「${file.name}」不符合图片格式或 65536 KB 限制；本次未追加文件。`, true); $("upload-files").value = ""; return; }
     }
     for (const file of files) uploads.rows.push({ key: U.requestId(), file, preview: URL.createObjectURL(file), name: uploads.replacement ? uploads.replacement.name : file.name.replace(/\.[^.]+$/, "").slice(0, 200), stageRequestId: U.requestId(), submitRequestId: U.requestId(), stage_id: "", expires_at: "", status: "pending", task_id: "", error: "" });
     $("upload-files").value = "";
@@ -487,7 +487,7 @@
       name.value = row.name;
       name.disabled = uploads.active || ["submitted", "submitting", "unknown", "failed"].includes(row.status);
       name.addEventListener("input", () => { row.name = name.value; updateUploadControls(); });
-      field.append(name, element("p", { class: "help" }, `原文件：${row.file.name} · ${(row.file.size / 1024 / 1024).toFixed(1)} MiB`), element("p", { class: "help" }, `${labels[row.status]}${row.expires_at ? ` · 暂存有效至 ${U.formatTime(row.expires_at)}` : ""}${row.task_id ? ` · 任务号：${row.task_id}` : ""}`));
+      field.append(name, element("p", { class: "help" }, `原文件：${row.file.name} · ${(row.file.size / 1024).toFixed(2)} KB`), element("p", { class: "help" }, `${labels[row.status]}${row.expires_at ? ` · 暂存有效至 ${U.formatTime(row.expires_at)}` : ""}${row.task_id ? ` · 任务号：${row.task_id}` : ""}`));
       if (row.error) field.append(element("p", { class: "task-error" }, row.error));
       const remove = button("移除", () => {
         if (uploads.active || row.status === "unknown") return;
@@ -594,7 +594,7 @@
             const result = await U.action("submit", withoutRequestId(signed), signed.request_id, token);
             row.status = "submitted";
             row.task_id = result.task_id || "";
-            U.notify(`已受理 ${index + 1}/${rows.length} 项，请在管理任务中查看处理结果。`);
+            U.notify(`已受理 ${index + 1}/${rows.length} 项，请在任务列表中查看处理结果。`);
           } catch (error) { row.status = error.definite ? "failed" : "unknown"; row.error = U.message(error); throw error; }
           finally { renderUploads(); }
         }
@@ -703,11 +703,18 @@
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && uploads.active) uploads.stop = true; });
     window.addEventListener("pagehide", revokeRows);
   }
-  async function start() {
-    const navigation = await U.init();
-    bind();
-    await loadSettings();
-    filters.limit = Math.min(24, Math.max(1, settings.page_size));
+  let bound = false;
+  let configured = false;
+  async function start(navigation) {
+    if (!bound) {
+      bind();
+      bound = true;
+    }
+    if (!configured) {
+      await loadSettings();
+      configured = true;
+      filters.limit = Math.min(24, Math.max(1, settings.page_size));
+    }
     const carried = navigation.gallery_filters;
     if (U.plainObject(carried)) {
       if (["", "person", "outfit", "scene"].includes(carried.category)) filters.category = carried.category;
@@ -722,5 +729,5 @@
     await refreshGallery();
     if (typeof navigation.asset_id === "string") await openAsset(navigation.asset_id);
   }
-  start().catch(U.fatal);
+  U.registerView("gallery", start);
 })();

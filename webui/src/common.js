@@ -1,4 +1,4 @@
-/* 两页共用的官方桥接客户端：只查询可退避，action/upload 不自动重放。 */
+/* 子页面共用的官方桥接客户端：只查询可退避，action/upload 不自动重放。 */
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
@@ -6,9 +6,12 @@
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const categories = { person: "人物", outfit: "服装", scene: "场景" };
   const assetStatuses = { active: "已启用", disabled: "已停用", needs_review: "待审核", deleted: "已删除" };
-  const taskStatuses = { queued: "排队中", running: "处理中", generated: "已生成，等待完成", sent: "已完成", completed: "已完成", failed: "失败", cancelled: "已取消" };
-  const operations = { import: "导入参考图", extract: "提取并生成参考板", replace: "替换参考图", retag: "重新标注", regenerate: "重新生成参考板", generate_person: "生成人物参考板" };
-  const origins = { webui: "网页", qq: "QQ 命令", automatic: "自动任务", startup: "启动扫描", unknown: "未知来源" };
+  const taskStatuses = { queued: "排队中", running: "处理中", generated: "已生成", sent: "已投递", completed: "已完成", failed: "失败", cancelled: "已取消" };
+  const operations = { photo: "人物写真", scene_photo: "场景照片", image: "场景照片（历史）", notification_retry: "通知重试", import: "导入参考图", extract: "提取并生成参考板", replace: "替换参考图", retag: "重新标注", regenerate: "重新生成参考板", generate_person: "生成人物参考板" };
+  const origins = { webui: "网页", qq: "聊天 / QQ", automatic: "自动任务", startup: "启动扫描", unknown: "未知来源" };
+  const views = new Map();
+  let activeView = "";
+  let initialization = null;
   const receipts = new Map();
   let queue = Promise.resolve();
   let exclusive = false;
@@ -262,11 +265,29 @@
     if (carried.length) state.receipt_ids = carried;
     if (plainObject(state.gallery_filters) && typeof state.gallery_filters.search === "string") state.gallery_filters.search = state.gallery_filters.search.slice(0, 1000);
     if (new TextEncoder().encode(JSON.stringify(state)).length > 4096) { notify("页面状态超过宿主导航配额，请记下未知请求号后减少搜索文字。", true); return; }
-    try { await serial(() => window.maibot.navigate(page, state)); }
+    try {
+      if (!views.has(page)) throw new Error("未知子页面");
+      activeView = page;
+      for (const id of ["gallery", "tasks"]) {
+        $(`${id}-view`).hidden = id !== page;
+        $(`nav-${id}`).setAttribute("aria-current", id === page ? "page" : "false");
+        unavailable($(`nav-${id}`), id === page);
+      }
+      document.querySelectorAll("dialog").forEach((node) => { if (node.open) node.close(); });
+      $("view-title").textContent = page === "gallery" ? "参考图库" : "任务列表";
+      document.dispatchEvent(new CustomEvent("photo:view", { detail: { view: page } }));
+      await views.get(page)(state);
+    }
     catch (error) { notify(message(error), true); }
   }
-  async function init() {
-    if (!window.maibot) throw new Error("请从 MaiBot 1.3.6 的「麦麦写真」工作区打开此页面；独立文件不连接服务。");
+  function registerView(id, start) { views.set(id, start); }
+  async function startStudio() {
+    const state = await init();
+    await navigate(state.view === "tasks" ? "tasks" : "gallery", state);
+  }
+  function init() { return initialization ||= initialize(); }
+  async function initialize() {
+    if (!window.maibot) throw new Error("请从 MaiBot 侧栏的「麦麦写真」打开此页面；独立文件不连接服务。");
     await window.maibot.ready;
     applyContext();
     window.addEventListener("maibot:context", applyContext);
@@ -289,5 +310,5 @@
     if ($("busy-label")) $("busy-label").textContent = "未连接宿主，所有操作不可用。";
     document.querySelectorAll("button, input, select, textarea").forEach((node) => { node.disabled = true; });
   }
-  window.PhotoUI = { $, element, button, clone, plainObject, categories, assetStatuses, taskStatuses, operations, origins, notify, message, query, action, upload, serial, requestId, runExclusive, unavailable, updateLocks, requireResolved, isUncertain, lookupReceipt, ask, confirmAction, expiryMillis, formatTime, safeImage, setImage, navigate, init, fatal, get busy() { return exclusive; } };
+  window.PhotoUI = { $, element, button, clone, plainObject, categories, assetStatuses, taskStatuses, operations, origins, notify, message, query, action, upload, serial, requestId, runExclusive, unavailable, updateLocks, requireResolved, isUncertain, lookupReceipt, ask, confirmAction, expiryMillis, formatTime, safeImage, setImage, navigate, registerView, startStudio, init, fatal, get activeView() { return activeView; }, get busy() { return exclusive; } };
 })();

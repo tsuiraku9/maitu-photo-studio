@@ -98,16 +98,15 @@ def _accepts(parameter: dict[str, Any], value: Any) -> bool:
     return True
 
 
-def test_schema2_custom_workspace_and_private_api_bindings() -> None:
+def test_schema2_custom_sidebar_and_private_api_bindings() -> None:
     assert DECLARATION["schema_version"] == 2
     assert DECLARATION["workspace_title"] == "麦麦写真"
     assert set(DECLARATION["required_capabilities"]) == {"custom_pages", "image_upload", "structured_arguments"}
     assert [(page["id"], page["title"]) for page in DECLARATION["pages"]] == [
-        ("gallery", "参考图库"),
-        ("tasks", "管理任务"),
+        ("gallery", "麦麦写真"),
     ]
     for page in DECLARATION["pages"]:
-        assert page["mode"] == "custom" and page["placement"] == "workspace"
+        assert page["mode"] == "custom" and page["placement"] == "sidebar"
         assert page["layout"] == "document"
         assert page["entry"] == f"webui/{page['id']}.html"
         assert "document" not in page and "content" not in page
@@ -126,7 +125,8 @@ def test_schema2_custom_workspace_and_private_api_bindings() -> None:
         "required": True,
         "max_length": 128,
     }
-    assert DECLARATION["pages"][1]["uploads"] == {}
+    assert len(DECLARATION["pages"]) == 1
+    assert "prepare_task_preview" in gallery["actions"]["manage"]["parameters"]["operation"]["choices"]
 
 
 def test_structured_union_and_canonical_confirmation_contract() -> None:
@@ -177,7 +177,7 @@ def test_standard_library_build_is_deterministic_and_current(tmp_path: Path) -> 
     module = _builder()
     first = module.build_documents()
     assert first == module.build_documents()
-    assert set(first) == {"webui/gallery.html", "webui/tasks.html"}
+    assert set(first) == {"webui/gallery.html"}
     for entry, document in first.items():
         assert document == (ROOT / entry).read_text(encoding="utf-8")
         assert len(document.encode("utf-8")) < 2 * 1024 * 1024
@@ -189,7 +189,7 @@ def test_standard_library_build_is_deterministic_and_current(tmp_path: Path) -> 
         assert (tmp_path / entry).read_text(encoding="utf-8") == document
 
 
-@pytest.mark.parametrize("page_id", ["gallery", "tasks"])
+@pytest.mark.parametrize("page_id", ["gallery"])
 def test_self_contained_chinese_accessible_document_and_script_syntax(page_id: str) -> None:
     document = (ROOT / "webui" / f"{page_id}.html").read_text(encoding="utf-8")
     parser = DocumentContract()
@@ -209,7 +209,7 @@ def test_self_contained_chinese_accessible_document_and_script_syntax(page_id: s
         assert not re.search(r"\b(?:user_id|stream_id|source_path|reference_path|upload_id)\s*:", script)
         if shutil.which("node"):
             subprocess.run(["node", "--check"], input=script, text=True, capture_output=True, check=True)
-    for method in ("ready", "query", "action", "upload", "navigate", "context"):
+    for method in ("ready", "query", "action", "upload", "context"):
         assert f"window.maibot.{method}" in document
     for control in parser.controls:
         attributes = control["attributes"]
@@ -296,7 +296,7 @@ const webTask = { task_id: "task-web", id: "task-web", kind: "reference", operat
 const qqTask = { ...webTask, task_id: "task-qq", id: "task-qq", origin: "qq", status: "queued", can_cancel: true, can_retry: true };
 const completedTask = { ...webTask, task_id: "task-done", id: "task-done", origin: "automatic", status: "completed", error: "", can_cancel: false, can_retry: false };
 function environment(pageId, handlers = {}) {
-  const page = payload.declaration.pages.find((page) => page.id === pageId);
+  const page = payload.declaration.pages[0];
   const document = new Document(payload.controls[pageId]);
   const events = new Events();
   const timers = new Map(); let timerId = 0;
@@ -330,7 +330,7 @@ function environment(pageId, handlers = {}) {
   };
   const window = {
     addEventListener: (...args) => events.addEventListener(...args), dispatchEvent: (...args) => events.dispatchEvent(...args),
-    maibot: { ready: Promise.resolve(), context: { theme: "light", language: "en", dashboardStyle: "modern", styles: "" }, page: { id: pageId, layout: "document", state: {} }, query: (alias, args) => invoke("query", alias, args), action: (alias, args) => invoke("action", alias, args), upload: (alias, file, args, options) => invoke("upload", alias, args, { file, options }), navigate: (pageId, state) => invoke("navigate", pageId, state) },
+    maibot: { ready: Promise.resolve(), context: { theme: "light", language: "en", dashboardStyle: "modern", styles: "" }, page: { id: "gallery", layout: "document", state: { view: pageId } }, query: (alias, args) => invoke("query", alias, args), action: (alias, args) => invoke("action", alias, args), upload: (alias, file, args, options) => invoke("upload", alias, args, { file, options }), navigate: (pageId, state) => invoke("navigate", pageId, state) },
   };
   const context = vm.createContext({ window, document, crypto, console, TextEncoder, AbortController, URL: { createObjectURL: () => "blob:local-only", revokeObjectURL() {} }, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } }, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout });
   const scripts = payload.scripts[pageId];
@@ -354,8 +354,10 @@ const scenarios = {
     assert.equal(env.U.safeImage("data:image/svg+xml;base64,YQ=="), null);
     assert.equal(env.U.safeImage("https://private.example/a.png"), null);
     assert.equal(env.U.safeImage("data:image/png;base64,YQ=="), "data:image/png;base64,YQ==");
+    env.U.registerView("tasks", async () => {});
     await env.U.navigate("tasks", { gallery_filters: { search: "测试" } });
-    assert.equal(env.calls.at(-1).kind, "navigate"); assert.equal(env.calls.at(-1).alias, "tasks");
+    assert.equal(env.U.activeView, "tasks"); assert(env.$("gallery-view").hidden); assert(!env.$("tasks-view").hidden);
+    assert.equal(env.calls.filter((call) => call.kind === "navigate").length, 0);
   },
   async timeout_receipt_only() {
     const env = environment("gallery", {
@@ -379,8 +381,10 @@ const scenarios = {
     await env.U.init();
     await assert.rejects(() => env.U.action("edit", { asset_id: "a1", name: "名字" }, "unknown-request"), /timed out/);
     assert(env.U.isUncertain()); assert.throws(() => env.U.requireResolved(), /尚未确定/);
+    let carried;
+    env.U.registerView("tasks", async (state) => { carried = state; });
     await env.U.navigate("tasks", {});
-    assert.deepEqual(env.calls.at(-1).args.receipt_ids, ["unknown-request"]);
+    assert.deepEqual(Array.from(carried.receipt_ids), ["unknown-request"]);
     state = "accepted"; await env.U.lookupReceipt("unknown-request");
     assert(env.U.isUncertain(), "有accepted而无response仍须未知锁");
     state = "completed"; await env.U.lookupReceipt("unknown-request");
@@ -522,6 +526,27 @@ const scenarios = {
     const timeout = environment("gallery", { query: async (alias, args, extra, query) => args.operation === "images" ? { images: [] } : query(alias, args), action: async () => { throw new Error("Request timed out"); } });
     timeout.loadPage(); await flush(); assert.equal(timeout.calls.filter((call) => call.kind === "action").length, 1, "缓存action超时不能自动重放"); assert.equal(timeout.$("receipt-count").textContent, ""); assert(!timeout.U.isUncertain());
   },
+  async single_entry_subpages_keep_state_and_pause_polling() {
+    const env = environment("gallery"); env.loadPage(); await flush();
+    assert.equal(env.U.activeView, "gallery"); assert.equal(env.clock.timers.size, 0);
+    change(env, "search-filter", "保留筛选"); await click(env, "apply-filters");
+    await click(env, "nav-tasks");
+    assert.equal(env.U.activeView, "tasks"); assert(env.$("gallery-view").hidden); assert(!env.$("tasks-view").hidden);
+    assert.equal(env.clock.timers.size, 1);
+    await click(env, "nav-gallery");
+    assert.equal(env.U.activeView, "gallery"); assert.equal(env.$("search-filter").value, "保留筛选");
+    assert.equal(env.clock.timers.size, 0);
+    env.document.dispatchEvent({ type: "visibilitychange" }); await flush();
+    assert.equal(env.clock.timers.size, 0);
+    await click(env, "nav-tasks"); await click(env, "nav-gallery"); await click(env, "nav-tasks");
+    const before = env.calls.filter((call) => call.kind === "query" && call.alias === "tasks" && call.args.operation === "list").length;
+    await click(env, "refresh-tasks");
+    const after = env.calls.filter((call) => call.kind === "query" && call.alias === "tasks" && call.args.operation === "list").length;
+    assert.equal(after, before + 1, "重复切页不得重复绑定按钮事件");
+    assert.equal(env.calls.filter((call) => call.kind === "navigate").length, 0);
+    assert.equal(env.calls.filter((call) => call.kind === "action").length, 0);
+    assert.equal(env.max(), 1);
+  },
   async visible_poll_backoff_and_cleanup() {
     let fail = false;
     const env = environment("tasks", { query: async (alias, args, extra, query) => { if (fail && args.operation === "list") throw new Error("查询失败"); return query(alias, args); } });
@@ -589,6 +614,7 @@ const scenarios = {
         "lazy_preview_and_image_batches",
         "empty_thumbnail_cache_prepares_and_displays",
         "thumbnail_prepare_skips_hidden_and_stale_pages",
+        "single_entry_subpages_keep_state_and_pause_polling",
         "visible_poll_backoff_and_cleanup",
         "query_backoff_never_replays_action",
         "unknown_batch_stops_and_doubleclick_blocks",
@@ -601,7 +627,7 @@ def test_built_pages_with_offline_fake_host_bridge(scenario: str) -> None:
     controls = {}
     scripts = {}
     for page_id in ("gallery", "tasks"):
-        document = (ROOT / "webui" / f"{page_id}.html").read_text(encoding="utf-8")
+        document = (ROOT / "webui" / "gallery.html").read_text(encoding="utf-8")
         parser = DocumentContract()
         parser.feed(document)
         controls[page_id] = parser.controls

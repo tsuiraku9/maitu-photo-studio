@@ -806,11 +806,54 @@ class SQLiteStorage:
         limit: int = 12,
         offset: int = 0,
     ) -> tuple[list[ImageTask], int]:
-        """Query reference jobs, including legacy jobs without an explicit origin."""
+        """保留参考图库查询入口，复用全部任务的分页语义。"""
+
+        return self.query_tasks(
+            origin=origin,
+            status="completed" if status == "sent" else status,
+            kind="reference",
+            limit=limit,
+            offset=offset,
+        )
+
+    def query_tasks(
+        self,
+        *,
+        origin: str = "",
+        status: TaskStatus | str = "",
+        kind: str = "",
+        task_id: str = "",
+        created_after: str = "",
+        created_before: str = "",
+        limit: int = 12,
+        offset: int = 0,
+    ) -> tuple[list[ImageTask], int]:
+        """查询全部持久任务；列表与总数在同一只读事务中取得。"""
 
         _validate_pagination(limit, offset)
-        clauses = ["kind LIKE 'reference\\_%' ESCAPE '\\'"]
+        clauses = ["1 = 1"]
         values: list[Any] = []
+        reference_clause = "kind LIKE 'reference\\_%' ESCAPE '\\'"
+        if kind == "reference":
+            clauses.append(reference_clause)
+        elif kind == "scene_photo":
+            clauses.append("kind IN ('scene_photo', 'image')")
+        elif kind:
+            clauses.append("kind = ?")
+            values.append(kind)
+        if task_id:
+            if not re.fullmatch(r"[0-9a-f-]{1,36}", task_id):
+                raise ValueError("任务号筛选必须是小写十六进制或 UUID 前缀")
+            clauses.append("id LIKE ?")
+            values.append(task_id + "%")
+        after = _datetime(created_after) if created_after else None
+        before = _datetime(created_before) if created_before else None
+        if after and before and after >= before:
+            raise ValueError("开始时间必须早于结束时间")
+        for operator, value in ((">=", after), ("<", before)):
+            if value is not None:
+                clauses.append(f"created_at {operator} ?")
+                values.append(_timestamp(value))
         if origin:
             clauses.append(
                 """
@@ -827,6 +870,10 @@ class SQLiteStorage:
         if status:
             clauses.append("status = ?")
             values.append(TaskStatus.SENT.value if status == "completed" else TaskStatus(status).value)
+            if status == "completed":
+                clauses.append("kind NOT IN ('photo', 'scene_photo', 'image')")
+            elif status == "sent":
+                clauses.append("kind IN ('photo', 'scene_photo', 'image')")
         where = " WHERE " + " AND ".join(clauses)
         with self.transaction(immediate=False) as connection:
             total = connection.execute("SELECT COUNT(*) FROM image_tasks" + where, values).fetchone()[0]

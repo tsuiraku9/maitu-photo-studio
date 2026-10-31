@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>麦麦写真</title><style>@@STYLE@@</style></head>
+<body>
+<main class="app">
+  <header class="page-heading"><div><p class="eyebrow">麦麦写真</p><h1 id="view-title">参考图库</h1><p class="muted">管理人物、服装与场景参考素材，查看全部照片与处理任务。</p></div><nav class="nav" aria-label="写真子页面"><button id="nav-gallery" type="button" data-navigation aria-current="page">参考图库</button><button id="nav-tasks" type="button" data-navigation>任务列表</button></nav></header>
+  <div id="notice" class="note notice" hidden><span id="notice-text"></span><button id="notice-close" type="button" aria-label="关闭提示">关闭</button></div>
+  <p id="busy-label" class="busy-label" role="status" aria-live="polite">等待宿主连接…</p>
+  <section id="gallery-view" class="subpage" aria-label="参考图库">@@GALLERY_BODY@@</section>
+  <section id="tasks-view" class="subpage" aria-label="任务列表" hidden>@@TASKS_BODY@@</section>
+  @@RECEIPTS@@
+</main>
+@@GALLERY_DIALOGS@@
+@@TASKS_DIALOGS@@
+<dialog id="confirm-dialog" class="small" aria-labelledby="confirm-title"><div class="dialog-header"><h2 id="confirm-title">确认操作</h2></div><div class="dialog-body"><p id="confirm-description" class="note"></p><pre id="confirm-summary"></pre></div><div class="dialog-footer"><button id="confirm-cancel" type="button">取消</button><button id="confirm-approve" type="button" class="primary">确认提交</button></div></dialog>
+<script>@@COMMON_JS@@</script><script>@@PAGE_JS@@</script>
+</body></html>

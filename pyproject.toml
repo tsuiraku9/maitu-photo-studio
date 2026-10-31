@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maitu-photo-studio"
-version = "0.3.1"
+version = "0.4.0"
 description = "MaiBot realistic photo generation and reference gallery plugin"
 requires-python = ">=3.12"
 dependencies = [
@@ -28,7 +28,8 @@ include = ["maitu_photo*"]
 
 [tool.setuptools.data-files]
 "." = ["_manifest.json", "webui.json", "README.md", "requirements.txt"]
-"webui" = ["webui/gallery.html", "webui/tasks.html"]
+"webui" = ["webui/gallery.html"]
+"scripts" = ["scripts/migrate_config_v040.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>麦麦写真 · 参考图库</title><style>:root {
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>麦麦写真</title><style>:root {
   color-scheme: light;
   --ui-bg-fallback: #f6f7f9; --ui-surface-fallback: #fff; --ui-ink-fallback: #202733;
   --ui-muted-fallback: #596575; --ui-soft-fallback: #edf0f4; --ui-border-fallback: #ccd3dd;
@@ -14,7 +14,7 @@
   --ui-primary: var(--maibot-primary, var(--ui-primary-fallback));
   --ui-on-primary: var(--maibot-primary-foreground, var(--ui-on-primary-fallback));
   --ui-danger: var(--maibot-danger, var(--ui-danger-fallback));
-  --ui-radius: 10px;
+  --ui-radius: 16px;
 }
 :root.dark {
   color-scheme: dark;
@@ -36,16 +36,24 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--ui-prima
 textarea { resize: vertical; min-height: 90px; width: 100%; }
 [hidden] { display: none !important; }
 h1, h2, h3, p { margin: 0; } h1 { font-size: 22px; } h2 { font-size: 18px; } h3 { font-size: 15px; }
-.app { max-width: 1360px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
-.page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.app { max-width: 1360px; margin: 0 auto; padding: 24px; display: grid; gap: 20px; }
+.subpage { display: grid; gap: 20px; }
+.page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; flex-wrap: wrap; padding: 22px 24px; border: 1px solid var(--ui-border); border-radius: 20px; background: linear-gradient(120deg, color-mix(in srgb, var(--ui-primary) 9%, var(--ui-surface)), var(--ui-surface) 75%); }
+.page-heading h1 { font-size: 27px; font-weight: 750; letter-spacing: -.035em; }
+.eyebrow { color: var(--ui-primary); font-size: 12px; font-weight: 650; letter-spacing: .09em; margin-bottom: 5px; }
 .page-heading p { max-width: 850px; margin-top: 5px; }
 .nav, .row, .toolbar, .selection-bar, .pagination, .dialog-footer { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-.nav button[aria-current="page"] { border-color: var(--ui-primary); color: var(--ui-primary); font-weight: 650; }
+.nav { background: var(--ui-soft); border-radius: 12px; padding: 4px; gap: 4px; }
+.nav button { border-color: transparent; background: transparent; border-radius: 9px; }
+.nav button[aria-current="page"] { border-color: var(--ui-border); background: var(--ui-surface); color: var(--ui-primary); font-weight: 650; opacity: 1; }
 .muted, .help { color: var(--ui-muted); } .help { font-size: 13px; }
 .note { border-left: 3px solid var(--ui-primary); padding: 9px 12px; background: var(--ui-soft); border-radius: 0 7px 7px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .note.error { border-left-color: var(--ui-danger); } .notice { display: flex; gap: 10px; align-items: flex-start; }
 .notice span { flex: 1; } .notice button { flex-shrink: 0; }
-.panel { padding: 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); }
+.panel { padding: 20px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); }
+.overview-strip { display: flex; align-items: center; gap: 26px; padding: 18px 24px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface); }
+.overview-strip > div { min-width: 130px; display: grid; }
+.overview-strip strong { font-size: 30px; line-height: 1.3; font-variant-numeric: tabular-nums; }
 .filters { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
 .field { display: grid; gap: 5px; min-width: 130px; } .field.grow { flex: 1; min-width: 200px; }
 .field.wide { grid-column: 1 / -1; } .field label, .field-label { font-weight: 600; }
@@ -53,7 +61,8 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 22px; } h2 { font-size: 18px; } h3 
 .selection-bar { padding: 10px 0; border-bottom: 1px solid var(--ui-border); }
 .selection-count { margin-right: auto; }
 .gallery-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); }
-.asset-card { overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface); display: flex; flex-direction: column; }
+.asset-card { overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface); display: flex; flex-direction: column; transition: border-color .15s ease, box-shadow .15s ease; }
+.asset-card:hover { border-color: color-mix(in srgb, var(--ui-primary) 55%, var(--ui-border)); box-shadow: 0 5px 18px color-mix(in srgb, var(--ui-ink) 7%, transparent); }
 .asset-card.selected { outline: 2px solid var(--ui-primary); outline-offset: -2px; }
 .asset-image { padding: 0; width: 100%; border: 0; border-radius: 0; background: var(--ui-soft); aspect-ratio: 4 / 3; display: grid; place-items: center; overflow: hidden; }
 .asset-image img { width: 100%; height: 100%; max-height: 270px; object-fit: contain; }
@@ -63,6 +72,10 @@ h1, h2, h3, p { margin: 0; } h1 { font-size: 22px; } h2 { font-size: 18px; } h3 
 .asset-tags { color: var(--ui-muted); font-size: 13px; overflow-wrap: anywhere; }
 .asset-actions { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; margin-top: auto; }
 .badge { display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid var(--ui-border); border-radius: 5px; font-size: 12px; background: var(--ui-soft); }
+.status-running, .status-generated { color: var(--ui-primary); border-color: color-mix(in srgb, var(--ui-primary) 45%, var(--ui-border)); }
+.status-sent, .status-completed { color: light-dark(#1d694b, #87d4b0); background: light-dark(#edf8f1, #203b30); }
+.status-failed { color: var(--ui-danger); border-color: var(--ui-danger); }
+.status-cancelled { color: var(--ui-muted); }
 .empty { padding: 40px 18px; text-align: center; border: 1px dashed var(--ui-border); border-radius: var(--ui-radius); color: var(--ui-muted); }
 .pagination { justify-content: center; padding: 8px; }
 .pagination .help { text-align: center; min-width: 150px; }
@@ -93,11 +106,23 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
 .task-table th, .task-table td { padding: 12px; border-bottom: 1px solid var(--ui-border); vertical-align: top; }
 .task-table th { background: var(--ui-soft); font-size: 13px; } .task-table td { max-width: 340px; overflow-wrap: anywhere; }
 .task-table tr:last-child td { border-bottom: 0; } .task-error { color: var(--ui-danger); white-space: pre-wrap; }
+.task-table tbody tr:hover { background: color-mix(in srgb, var(--ui-primary) 3%, var(--ui-surface)); }
+.result-preview { display: grid; gap: 12px; border-top: 1px solid var(--ui-border); padding-top: 16px; }
+.result-preview img { width: 100%; max-height: 55dvh; object-fit: contain; border-radius: 12px; background: var(--ui-soft); }
 .metadata { display: grid; gap: 7px 16px; grid-template-columns: 125px minmax(0, 1fr); margin: 0; }
 .metadata dt { color: var(--ui-muted); } .metadata dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .busy-label { color: var(--ui-muted); min-height: 20px; }
 @media (max-width: 700px) {
   .app { padding: 10px; gap: 12px; } .filters .field { flex: 1; min-width: 135px; }
+  .page-heading { padding: 18px; gap: 16px; border-radius: 16px; } .page-heading h1 { font-size: 24px; }
+  .panel { padding: 14px; } .overview-strip { padding: 16px; gap: 16px; }
+  .table-wrap { overflow: visible; background: transparent; border: 0; }
+  .task-table, .task-table tbody { display: grid; min-width: 0; gap: 12px; }
+  .task-table thead { display: none; }
+  .task-table tr { display: grid; grid-template-columns: 1fr 1fr; padding: 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface); }
+  .task-table td { display: block; min-width: 0; max-width: none; padding: 8px; border: 0; }
+  .task-table td::before { content: attr(data-label); display: block; color: var(--ui-muted); font-size: 12px; margin-bottom: 4px; }
+  .task-table td:last-child { grid-column: 1 / -1; }
   .filters .field.grow { flex-basis: 100%; } .form-grid { grid-template-columns: 1fr; }
   .selection-count { width: 100%; } .gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
   .asset-content { padding: 9px; } .asset-actions button { width: 100%; } .asset-image img { max-height: 190px; }
@@ -112,13 +137,10 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
 </style></head>
 <body>
 <main class="app">
-  <header class="page-heading">
-    <div><h1>参考图库</h1><p class="muted">管理人物、服装与场景参考素材。原有 QQ 命令保留；网页不会自动发起模型请求。</p></div>
-    <nav class="nav" aria-label="工作区页面"><button type="button" aria-current="page" disabled>参考图库</button><button id="nav-tasks" type="button" data-navigation>管理任务</button></nav>
-  </header>
+  <header class="page-heading"><div><p class="eyebrow">麦麦写真</p><h1 id="view-title">参考图库</h1><p class="muted">管理人物、服装与场景参考素材，查看全部照片与处理任务。</p></div><nav class="nav" aria-label="写真子页面"><button id="nav-gallery" type="button" data-navigation aria-current="page">参考图库</button><button id="nav-tasks" type="button" data-navigation>任务列表</button></nav></header>
   <div id="notice" class="note notice" hidden><span id="notice-text"></span><button id="notice-close" type="button" aria-label="关闭提示">关闭</button></div>
   <p id="busy-label" class="busy-label" role="status" aria-live="polite">等待宿主连接…</p>
-  <section class="panel" aria-label="筛选与工具栏">
+  <section id="gallery-view" class="subpage" aria-label="参考图库"><section class="panel" aria-label="筛选与工具栏">
     <div class="filters">
       <div class="field"><label for="category-filter">素材类别</label><select id="category-filter"><option value="">全部类别</option><option value="person">人物</option><option value="outfit">服装</option><option value="scene">场景</option></select></div>
       <div class="field"><label for="status-filter">素材状态</label><select id="status-filter"><option value="">全部状态</option><option value="active">已启用</option><option value="disabled">已停用</option><option value="needs_review">待审核</option></select></div>
@@ -138,8 +160,28 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
   </section>
   <section aria-label="素材图片网格"><div id="gallery-grid" class="gallery-grid" aria-busy="true"></div><div id="gallery-empty" class="empty" hidden>没有符合筛选条件的素材。</div></section>
   <div class="pagination"><button id="previous-page" type="button">上一页</button><span id="page-label" class="help">正在加载…</span><button id="next-page" type="button">下一页</button></div>
-  <details id="receipts-panel" class="panel"><summary>请求回执 <span id="receipt-count"></span></summary><p class="help">操作超时不等于失败。这里只查询原请求，不会再次提交或计费。跨页可携带未确定的请求号；刷新前请记下请求号。</p><div class="row" style="margin:10px 0"><label for="receipt-input">按请求号找回</label><input id="receipt-input" class="mono" maxlength="128" placeholder="粘贴原请求号"><button id="receipt-lookup" type="button">查询回执</button></div><div id="receipt-list"></div></details>
+  </section>
+  <section id="tasks-view" class="subpage" aria-label="任务列表" hidden><section class="overview-strip" aria-label="任务概览"><div><span class="help">符合筛选的任务</span><strong id="task-total">—</strong></div><p class="muted">保留期内的全部任务集中查看。网页操作适用于网页图库任务。</p></section>
+  <section class="panel" aria-label="筛选与工具栏">
+    <div class="filters">
+      <div class="field"><label for="task-kind-filter">任务类型</label><select id="task-kind-filter"><option value="">全部类型</option><option value="photo">人物写真</option><option value="scene_photo">场景照片</option><option value="reference">参考图库</option><option value="notification_retry">通知重试</option></select></div>
+      <div class="field"><label for="task-status-filter">任务状态</label><select id="task-status-filter"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">处理中</option><option value="generated">已生成</option><option value="sent">已投递</option><option value="completed">处理已完成</option><option value="failed">失败</option><option value="cancelled">已取消</option></select></div>
+      <div class="field"><label for="task-origin-filter">任务来源</label><select id="task-origin-filter"><option value="">全部来源</option><option value="webui">网页</option><option value="qq">聊天 / QQ</option><option value="automatic">自动任务</option><option value="startup">启动扫描</option><option value="unknown">未知来源</option></select></div>
+      <div class="field"><label for="task-page-size">每页数量</label><select id="task-page-size"><option value="12">12 条</option><option value="24">24 条</option></select></div>
+      <div class="field grow"><label for="task-id-filter">任务号</label><input id="task-id-filter" type="search" maxlength="36" placeholder="完整任务号或前缀"></div><div class="field"><label for="task-after-filter">开始日期</label><input id="task-after-filter" type="date"></div><div class="field"><label for="task-before-filter">结束日期</label><input id="task-before-filter" type="date"></div>
+      <button id="apply-task-filters" type="button">应用筛选</button><button id="refresh-tasks" type="button">刷新</button>
+      <label class="check-label"><input id="task-poll" type="checkbox" checked>页面可见时自动刷新</label><span id="poll-status" class="help">页面隐藏后暂停轮询。</span>
+    </div>
+    <p class="help" style="margin-top:10px">轮询只查询，不提交操作。取消仅阻止可取消的后续处理；已经开始的模型费用不会退回。重试会展示费用确认，不会自动重试。</p>
+  </section>
+  <div id="task-table-wrap" class="table-wrap"><table class="task-table" aria-label="任务记录"><thead><tr><th scope="col">任务与来源</th><th scope="col">处理方式</th><th scope="col">状态与费用</th><th scope="col">结果与关联</th><th scope="col">创建时间</th><th scope="col">操作</th></tr></thead><tbody id="task-list"></tbody></table></div>
+  <div id="task-empty" class="empty" hidden>没有符合筛选条件的任务。</div>
+  <div class="pagination"><button id="previous-task-page" type="button">上一页</button><span id="task-page-label" class="help">正在加载…</span><button id="next-task-page" type="button">下一页</button></div>
+  </section>
+  <details id="receipts-panel" class="panel"><summary>请求回执 <span id="receipt-count"></span></summary><p class="help">超时后保留原请求号，只查询原回执，不重复提交。正在准备或没有响应的回执不能视为未受理。刷新页面前请记下未确定的请求号。</p><div class="row" style="margin:10px 0"><label for="receipt-input">按请求号找回</label><input id="receipt-input" class="mono" maxlength="128" placeholder="粘贴原请求号"><button id="receipt-lookup" type="button">查询回执</button></div><div id="receipt-list"></div></details>
+
 </main>
+
 <dialog id="asset-dialog" aria-labelledby="asset-dialog-title">
   <div class="dialog-header"><h2 id="asset-dialog-title">素材详情</h2><button id="asset-close" type="button">关闭</button></div>
   <div class="dialog-body">
@@ -160,7 +202,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
 <dialog id="upload-dialog" aria-labelledby="upload-title">
   <div class="dialog-header"><h2 id="upload-title">上传图片</h2><button id="upload-close" type="button">关闭</button></div>
   <div class="dialog-body">
-    <p class="note">第一步只上传并暂存，不调用模型；第二步提交才会处理图片。请先编辑名称。JPEG、PNG、WebP，每张源文件最多 64 MiB，宿主将上传副本最长边缩到 2048 像素。</p>
+    <p class="note">第一步只上传并暂存，不调用模型；第二步提交才会处理图片。请先编辑名称。JPEG、PNG、WebP，每张源文件最多 65536 KB，宿主将上传副本最长边缩到 2048 像素。</p>
     <div class="form-grid"><div class="field"><label for="upload-category">目标类别</label><select id="upload-category"><option value="outfit">服装</option><option value="scene">场景</option><option value="person">人物（单张）</option></select></div><div class="field"><label for="upload-operation">处理方式</label><select id="upload-operation"><option value="import">导入已有参考图</option><option value="extract">提取并生成参考板</option><option value="replace" hidden>替换已有参考图</option></select></div></div>
     <p id="upload-risk" class="note"></p>
     <div class="field"><label for="upload-files">选择图片（最多 20 张；人物单张）</label><input id="upload-files" type="file" accept="image/jpeg,image/png,image/webp" multiple></div>
@@ -174,8 +216,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
   <div class="dialog-footer"><button id="generate-person" type="button" class="primary" data-mutate>继续，确认生成费用与覆盖</button></div>
 </dialog>
 <dialog id="result-dialog" class="small" aria-labelledby="result-title"><div class="dialog-header"><h2 id="result-title">批量操作结果</h2><button id="result-close" type="button">关闭</button></div><div class="dialog-body"><p id="result-summary" class="note"></p><div id="result-items"></div><p class="help">失败条目不会自动重新提交。关闭此窗口后，请刷新并检查版本再决定下一步。</p></div></dialog>
+
+
+<dialog id="task-dialog" aria-labelledby="task-dialog-title"><div class="dialog-header"><h2 id="task-dialog-title">任务详情</h2><button id="task-close" type="button">关闭</button></div><div class="dialog-body"><dl id="task-metadata" class="metadata"></dl><section class="result-preview"><div class="toolbar"><h3>生成结果</h3><button id="task-load-preview" type="button">加载预览</button></div><p id="task-preview-note" class="help">预览按需加载，不调用模型。</p><img id="task-result-image" alt="任务生成结果预览" hidden></section><p id="task-detail-error" class="note error" hidden></p><p id="task-readonly" class="note" hidden>此任务仅提供查看。取消或重试请使用对应来源原有的操作入口。</p><p id="task-paid-note" class="note" hidden>模型请求已开始，可能已经产生费用。取消不会退费；重试可能再次计费。</p></div><div class="dialog-footer"><button id="task-copy-id" type="button">复制任务号</button><button id="task-refresh-detail" type="button">刷新详情</button><button id="task-view-asset" type="button" data-navigation>查看素材</button><button id="task-cancel" type="button" class="danger" data-mutate>取消任务</button><button id="task-retry" type="button" class="primary" data-mutate>重试并确认费用</button></div></dialog>
+
 <dialog id="confirm-dialog" class="small" aria-labelledby="confirm-title"><div class="dialog-header"><h2 id="confirm-title">确认操作</h2></div><div class="dialog-body"><p id="confirm-description" class="note"></p><pre id="confirm-summary"></pre></div><div class="dialog-footer"><button id="confirm-cancel" type="button">取消</button><button id="confirm-approve" type="button" class="primary">确认提交</button></div></dialog>
-<script>/* 两页共用的官方桥接客户端：只查询可退避，action/upload 不自动重放。 */
+<script>/* 子页面共用的官方桥接客户端：只查询可退避，action/upload 不自动重放。 */
 (() => {
   "use strict";
   const $ = (id) => document.getElementById(id);
@@ -183,9 +229,12 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
   const clone = (value) => JSON.parse(JSON.stringify(value));
   const categories = { person: "人物", outfit: "服装", scene: "场景" };
   const assetStatuses = { active: "已启用", disabled: "已停用", needs_review: "待审核", deleted: "已删除" };
-  const taskStatuses = { queued: "排队中", running: "处理中", generated: "已生成，等待完成", sent: "已完成", completed: "已完成", failed: "失败", cancelled: "已取消" };
-  const operations = { import: "导入参考图", extract: "提取并生成参考板", replace: "替换参考图", retag: "重新标注", regenerate: "重新生成参考板", generate_person: "生成人物参考板" };
-  const origins = { webui: "网页", qq: "QQ 命令", automatic: "自动任务", startup: "启动扫描", unknown: "未知来源" };
+  const taskStatuses = { queued: "排队中", running: "处理中", generated: "已生成", sent: "已投递", completed: "已完成", failed: "失败", cancelled: "已取消" };
+  const operations = { photo: "人物写真", scene_photo: "场景照片", image: "场景照片（历史）", notification_retry: "通知重试", import: "导入参考图", extract: "提取并生成参考板", replace: "替换参考图", retag: "重新标注", regenerate: "重新生成参考板", generate_person: "生成人物参考板" };
+  const origins = { webui: "网页", qq: "聊天 / QQ", automatic: "自动任务", startup: "启动扫描", unknown: "未知来源" };
+  const views = new Map();
+  let activeView = "";
+  let initialization = null;
   const receipts = new Map();
   let queue = Promise.resolve();
   let exclusive = false;
@@ -439,11 +488,29 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
     if (carried.length) state.receipt_ids = carried;
     if (plainObject(state.gallery_filters) && typeof state.gallery_filters.search === "string") state.gallery_filters.search = state.gallery_filters.search.slice(0, 1000);
     if (new TextEncoder().encode(JSON.stringify(state)).length > 4096) { notify("页面状态超过宿主导航配额，请记下未知请求号后减少搜索文字。", true); return; }
-    try { await serial(() => window.maibot.navigate(page, state)); }
+    try {
+      if (!views.has(page)) throw new Error("未知子页面");
+      activeView = page;
+      for (const id of ["gallery", "tasks"]) {
+        $(`${id}-view`).hidden = id !== page;
+        $(`nav-${id}`).setAttribute("aria-current", id === page ? "page" : "false");
+        unavailable($(`nav-${id}`), id === page);
+      }
+      document.querySelectorAll("dialog").forEach((node) => { if (node.open) node.close(); });
+      $("view-title").textContent = page === "gallery" ? "参考图库" : "任务列表";
+      document.dispatchEvent(new CustomEvent("photo:view", { detail: { view: page } }));
+      await views.get(page)(state);
+    }
     catch (error) { notify(message(error), true); }
   }
-  async function init() {
-    if (!window.maibot) throw new Error("请从 MaiBot 1.3.6 的「麦麦写真」工作区打开此页面；独立文件不连接服务。");
+  function registerView(id, start) { views.set(id, start); }
+  async function startStudio() {
+    const state = await init();
+    await navigate(state.view === "tasks" ? "tasks" : "gallery", state);
+  }
+  function init() { return initialization ||= initialize(); }
+  async function initialize() {
+    if (!window.maibot) throw new Error("请从 MaiBot 侧栏的「麦麦写真」打开此页面；独立文件不连接服务。");
     await window.maibot.ready;
     applyContext();
     window.addEventListener("maibot:context", applyContext);
@@ -466,7 +533,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
     if ($("busy-label")) $("busy-label").textContent = "未连接宿主，所有操作不可用。";
     document.querySelectorAll("button, input, select, textarea").forEach((node) => { node.disabled = true; });
   }
-  window.PhotoUI = { $, element, button, clone, plainObject, categories, assetStatuses, taskStatuses, operations, origins, notify, message, query, action, upload, serial, requestId, runExclusive, unavailable, updateLocks, requireResolved, isUncertain, lookupReceipt, ask, confirmAction, expiryMillis, formatTime, safeImage, setImage, navigate, init, fatal, get busy() { return exclusive; } };
+  window.PhotoUI = { $, element, button, clone, plainObject, categories, assetStatuses, taskStatuses, operations, origins, notify, message, query, action, upload, serial, requestId, runExclusive, unavailable, updateLocks, requireResolved, isUncertain, lookupReceipt, ask, confirmAction, expiryMillis, formatTime, safeImage, setImage, navigate, registerView, startStudio, init, fatal, get activeView() { return activeView; }, get busy() { return exclusive; } };
 })();
 </script><script>(() => {
   "use strict";
@@ -598,7 +665,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
     void loadThumbnails(generation, imageNodes);
   }
   async function loadThumbnails(generation, nodes) {
-    const current = () => generation === listGeneration && document.visibilityState !== "hidden";
+    const current = () => generation === listGeneration && U.activeView === "gallery" && document.visibilityState !== "hidden";
     const snapshot = [...items];
     const showImages = (ids, received) => {
       for (const id of ids) {
@@ -886,7 +953,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
       }
       let accepted = 0;
       for (const item of signedItems) {
-        if (document.visibilityState === "hidden") throw new Error("页面已隐藏，未提交的后续任务已停止。已提交任务可在管理任务中查看。");
+        if (document.visibilityState === "hidden") throw new Error("页面已隐藏，未提交的后续任务已停止。已提交任务可在任务列表中查看。");
         const result = await U.action("submit", withoutRequestId(item), item.request_id, token);
         accepted += 1;
         U.notify(`已受理 ${accepted}/${signedItems.length} 项${result.task_id ? `，最近任务号：${result.task_id}` : ""}。`);
@@ -937,7 +1004,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
     const limit = category === "person" || uploads.replacement ? 1 : maxBatch();
     if (files.length + uploads.rows.length > limit) { U.notify(`此操作最多选择 ${limit} 张图片；未追加文件。`, true); $("upload-files").value = ""; return; }
     for (const file of files) {
-      if (!file.size || file.size > 64 * 1024 * 1024 || file.name.length > 512 || !["", "image/jpeg", "image/png", "image/webp"].includes(file.type) || (file.type === "" && !/\.(?:jpe?g|png|webp)$/i.test(file.name))) { U.notify(`「${file.name}」不符合图片格式或 64 MiB 限制；本次未追加文件。`, true); $("upload-files").value = ""; return; }
+      if (!file.size || file.size > 64 * 1024 * 1024 || file.name.length > 512 || !["", "image/jpeg", "image/png", "image/webp"].includes(file.type) || (file.type === "" && !/\.(?:jpe?g|png|webp)$/i.test(file.name))) { U.notify(`「${file.name}」不符合图片格式或 65536 KB 限制；本次未追加文件。`, true); $("upload-files").value = ""; return; }
     }
     for (const file of files) uploads.rows.push({ key: U.requestId(), file, preview: URL.createObjectURL(file), name: uploads.replacement ? uploads.replacement.name : file.name.replace(/\.[^.]+$/, "").slice(0, 200), stageRequestId: U.requestId(), submitRequestId: U.requestId(), stage_id: "", expires_at: "", status: "pending", task_id: "", error: "" });
     $("upload-files").value = "";
@@ -957,7 +1024,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
       name.value = row.name;
       name.disabled = uploads.active || ["submitted", "submitting", "unknown", "failed"].includes(row.status);
       name.addEventListener("input", () => { row.name = name.value; updateUploadControls(); });
-      field.append(name, element("p", { class: "help" }, `原文件：${row.file.name} · ${(row.file.size / 1024 / 1024).toFixed(1)} MiB`), element("p", { class: "help" }, `${labels[row.status]}${row.expires_at ? ` · 暂存有效至 ${U.formatTime(row.expires_at)}` : ""}${row.task_id ? ` · 任务号：${row.task_id}` : ""}`));
+      field.append(name, element("p", { class: "help" }, `原文件：${row.file.name} · ${(row.file.size / 1024).toFixed(2)} KB`), element("p", { class: "help" }, `${labels[row.status]}${row.expires_at ? ` · 暂存有效至 ${U.formatTime(row.expires_at)}` : ""}${row.task_id ? ` · 任务号：${row.task_id}` : ""}`));
       if (row.error) field.append(element("p", { class: "task-error" }, row.error));
       const remove = button("移除", () => {
         if (uploads.active || row.status === "unknown") return;
@@ -1064,7 +1131,7 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
             const result = await U.action("submit", withoutRequestId(signed), signed.request_id, token);
             row.status = "submitted";
             row.task_id = result.task_id || "";
-            U.notify(`已受理 ${index + 1}/${rows.length} 项，请在管理任务中查看处理结果。`);
+            U.notify(`已受理 ${index + 1}/${rows.length} 项，请在任务列表中查看处理结果。`);
           } catch (error) { row.status = error.definite ? "failed" : "unknown"; row.error = U.message(error); throw error; }
           finally { renderUploads(); }
         }
@@ -1173,11 +1240,18 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && uploads.active) uploads.stop = true; });
     window.addEventListener("pagehide", revokeRows);
   }
-  async function start() {
-    const navigation = await U.init();
-    bind();
-    await loadSettings();
-    filters.limit = Math.min(24, Math.max(1, settings.page_size));
+  let bound = false;
+  let configured = false;
+  async function start(navigation) {
+    if (!bound) {
+      bind();
+      bound = true;
+    }
+    if (!configured) {
+      await loadSettings();
+      configured = true;
+      filters.limit = Math.min(24, Math.max(1, settings.page_size));
+    }
     const carried = navigation.gallery_filters;
     if (U.plainObject(carried)) {
       if (["", "person", "outfit", "scene"].includes(carried.category)) filters.category = carried.category;
@@ -1192,7 +1266,294 @@ pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 230px; overflo
     await refreshGallery();
     if (typeof navigation.asset_id === "string") await openAsset(navigation.asset_id);
   }
-  start().catch(U.fatal);
+  U.registerView("gallery", start);
 })();
-</script>
+
+(() => {
+  "use strict";
+  const U = window.PhotoUI;
+  const { $, element, button } = U;
+  let filters = { status: "", origin: "", kind: "", task_id: "", offset: 0, limit: 12 };
+  let galleryFilters = {};
+  let items = [];
+  let total = 0;
+  let task = null;
+  let generation = 0;
+  let detailGeneration = 0;
+  let loading = false;
+  let pollingTimer = null;
+  let pollFailures = 0;
+  let disposed = false;
+
+  function taskId(value) {
+    const id = value.task_id || value.id;
+    if (typeof id !== "string" || !id) throw new Error("任务缺少有效任务号。");
+    return id;
+  }
+  function taskLabel(value) { return U.operations[value.operation] || U.operations[value.kind] || "其它处理任务"; }
+  function originLabel(value) { return U.origins[value.origin] || "其它来源（只读）"; }
+  function canMutate(value, operation) {
+    return value.origin === "webui" && (operation === "cancel" ? value.can_cancel === true : value.can_retry === true);
+  }
+  function updatePagination() {
+    $("previous-task-page").disabled = loading || U.busy || filters.offset === 0;
+    $("next-task-page").disabled = loading || U.busy || filters.offset + filters.limit >= total;
+    $("refresh-tasks").disabled = loading || U.busy;
+  }
+  function updateDetailControls() {
+    U.unavailable($("task-cancel"), !task || !canMutate(task, "cancel"));
+    U.unavailable($("task-retry"), !task || !canMutate(task, "retry"));
+    U.unavailable($("task-view-asset"), !task || !task.asset_id);
+    $("task-load-preview").disabled = !task?.result_available || U.busy;
+    $("task-copy-id").disabled = !task || U.busy;
+    $("task-close").disabled = U.busy;
+    $("task-refresh-detail").disabled = loading || U.busy;
+  }
+  function renderTasks() {
+    const list = $("task-list");
+    list.replaceChildren();
+    $("task-empty").hidden = items.length !== 0;
+    $("task-table-wrap").hidden = items.length === 0;
+    for (const entry of items) {
+      const row = element("tr");
+      const identity = element("td");
+      identity.append(element("p", { class: "mono", title: taskId(entry) }, taskId(entry).slice(0, 12)), element("p", { class: "help" }, originLabel(entry)));
+      const operation = element("td", {}, taskLabel(entry));
+      const state = element("td");
+      state.append(element("span", { class: `badge status-${entry.status}` }, U.taskStatuses[entry.status] || "未知状态"), element("p", { class: "help" }, entry.paid_request_started ? "模型请求已开始，可能已计费" : "尚未标记模型请求开始"));
+      if (entry.delivery_status === "sent") state.append(element("p", { class: "help" }, entry.notification_failed ? "图片已投递 · 通知失败" : entry.planner_notified ? "图片已投递 · 已通知" : "图片已投递"));
+      if (entry.error) state.append(element("p", { class: "task-error" }, String(entry.error)));
+      const assetCell = element("td");
+      if (entry.asset_id) assetCell.append(element("p", { class: "mono" }, `素材：${entry.asset_id}`));
+      if (entry.asset_status) assetCell.append(element("p", { class: "help" }, `素材状态：${U.assetStatuses[entry.asset_status] || "未知状态"}`));
+      if (entry.batch_id) assetCell.append(element("p", { class: "mono" }, `批次：${entry.batch_id}`));
+      if (entry.parent_task_id) assetCell.append(element("p", { class: "mono" }, `父任务：${entry.parent_task_id.slice(0, 12)}`));
+      if (entry.output_image?.size_kb !== undefined) assetCell.append(element("p", { class: "help" }, `发送图 ${Number(entry.output_image.size_kb).toFixed(2)} KB`));
+      if (!entry.asset_id && !entry.batch_id) assetCell.append(element("span", { class: "help" }, entry.result_available ? "生成结果可查看" : entry.result_cleaned ? "结果已清理" : "暂无结果"));
+      const created = element("td", {}, U.formatTime(entry.created_at));
+      const actions = element("td");
+      const toolbar = element("div", { class: "toolbar" });
+      toolbar.append(button("详情", () => openTask(taskId(entry)), { disabled: U.busy }));
+      if (entry.origin !== "webui") toolbar.append(element("span", { class: "help" }, "只读"));
+      else {
+        const cancel = button("取消", () => mutateTask("cancel", entry), { "data-mutate": "", class: "danger" });
+        const retry = button("重试", () => mutateTask("retry", entry), { "data-mutate": "" });
+        U.unavailable(cancel, !canMutate(entry, "cancel"));
+        U.unavailable(retry, !canMutate(entry, "retry"));
+        toolbar.append(cancel, retry);
+      }
+      actions.append(toolbar);
+      row.append(identity, operation, state, assetCell, created, actions);
+      [identity, operation, state, assetCell, created, actions].forEach((cell, index) => cell.setAttribute("data-label", ["任务与来源", "处理方式", "状态", "结果与关联", "创建时间", "操作"][index]));
+      list.append(row);
+    }
+    $("task-page-label").textContent = total ? `第 ${Math.floor(filters.offset / filters.limit) + 1} 页 · 共 ${total} 条任务` : "共 0 条任务";
+    $("task-total").textContent = String(total);
+    updatePagination();
+  }
+  function metadata(label, value) {
+    $("task-metadata").append(element("dt", {}, label), element("dd", {}, value));
+  }
+  function renderDetail() {
+    if (!task) return;
+    $("task-metadata").replaceChildren();
+    metadata("任务号", taskId(task));
+    metadata("处理方式", taskLabel(task));
+    metadata("来源", originLabel(task));
+    metadata("任务状态", U.taskStatuses[task.status] || "未知状态");
+    metadata("图片投递", ({ sent: "已成功投递", failed: "投递失败", pending: "等待投递", none: "此任务不投递图片" })[task.delivery_status] || "暂无记录");
+    metadata("Planner 通知", task.notification_failed ? "通知失败，图片投递状态见上方" : task.planner_notified ? "已通知" : "尚未通知或未启用");
+    metadata("模型请求", task.paid_request_started ? "已经开始，可能已产生费用" : "尚未标记开始；不代表重试免费");
+    metadata("素材号", task.asset_id || "暂无");
+    metadata("素材状态", task.asset_status ? U.assetStatuses[task.asset_status] || "未知状态" : "暂无");
+    metadata("批次号", task.batch_id || "不是批量任务");
+    if (task.parent_task_id) metadata("父任务", task.parent_task_id);
+    if (Array.isArray(task.references)) metadata("使用参考图", task.references.filter((entry) => entry.asset_id).map((entry) => `${U.categories[entry.role] || entry.role}：${entry.asset_id}`).join("\n") || "未使用参考图");
+    if (task.output_image?.original_kb !== undefined) {
+      metadata("图片大小", `${Number(task.output_image.original_kb).toFixed(2)} KB → ${Number(task.output_image.size_kb).toFixed(2)} KB`);
+      metadata("发送压缩", task.output_image.enabled ? task.output_image.compressed ? "已压缩" : "未超限，原样发送" : "沿用原图（历史策略）");
+      if (task.output_image.width) metadata("发送图尺寸", `${task.output_image.width} × ${task.output_image.height}`);
+    }
+    metadata("生成结果", task.result_available ? "可查看" : task.result_cleaned ? "结果已清理，保留任务记录" : "暂无可用结果");
+    metadata("创建时间", U.formatTime(task.created_at));
+    if (task.updated_at) metadata("更新时间", U.formatTime(task.updated_at));
+    $("task-detail-error").hidden = !task.error;
+    $("task-detail-error").textContent = task.error ? String(task.error) : "";
+    $("task-readonly").hidden = task.origin === "webui";
+    $("task-paid-note").hidden = !task.paid_request_started;
+    updateDetailControls();
+  }
+  async function readDetail(id) {
+    const current = ++detailGeneration;
+    const result = await U.query("tasks", "detail", { task_id: id });
+    if (current !== detailGeneration || disposed) return null;
+    if (!U.plainObject(result.task) || taskId(result.task) !== id) throw new Error("任务详情响应与查询不一致。");
+    task = result.task;
+    renderDetail();
+    return task;
+  }
+  async function openTask(id) {
+    if (U.busy) return;
+    $("task-result-image").hidden = true;
+    $("task-preview-note").textContent = "预览按需加载，不调用模型。";
+    try { if (await readDetail(id)) $("task-dialog").showModal(); }
+    catch (error) { U.notify(U.message(error), true); }
+  }
+  function closeTask() {
+    if (U.busy) return;
+    detailGeneration += 1;
+    task = null;
+    $("task-dialog").close();
+  }
+  async function loadPreview() {
+    if (!task?.result_available || U.busy) return;
+    const id = taskId(task);
+    await U.runExclusive(async () => {
+      let preview = await U.query("tasks", "image", { task_id: id });
+      if (!preview.ready && preview.available) {
+        await U.action("prepare_task_preview", { task_id: id }, U.requestId(), undefined, { tracked: false });
+        preview = await U.query("tasks", "image", { task_id: id });
+      }
+      if (!task || taskId(task) !== id) return;
+      if (!preview.ready) { $("task-preview-note").textContent = "结果不可用或已清理，请刷新详情。"; return; }
+      U.setImage($("task-result-image"), preview.data_url);
+      $("task-result-image").hidden = false;
+      $("task-preview-note").textContent = "此处为预览副本，原图按结果保留策略保存。";
+    }, "正在准备结果预览…");
+  }
+  async function copyTaskId() {
+    if (!task) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(taskId(task));
+      else {
+        const field = element("textarea");
+        field.value = taskId(task);
+        field.setAttribute("aria-label", "待复制任务号");
+        $("task-dialog").append(field);
+        try {
+          field.select();
+          if (!document.execCommand("copy")) throw new Error("复制不可用");
+        } finally { field.remove(); }
+      }
+      U.notify("任务号已复制。");
+    } catch (_) { U.notify("请在详情中选中完整任务号复制。"); }
+  }
+  function schedulePoll() {
+    if (pollingTimer !== null) clearTimeout(pollingTimer);
+    pollingTimer = null;
+    if (disposed || U.activeView !== "tasks" || !$("task-poll").checked) { $("poll-status").textContent = "自动刷新已关闭。"; return; }
+    if (document.visibilityState === "hidden") { $("poll-status").textContent = "页面已隐藏，轮询暂停。"; return; }
+    const interval = Math.min(60000, 5000 * (2 ** pollFailures));
+    $("poll-status").textContent = pollFailures ? `查询失败后退避，约 ${interval / 1000} 秒后再查。` : "页面可见时每 5 秒只读刷新。";
+    pollingTimer = setTimeout(() => {
+      pollingTimer = null;
+      if (disposed || U.activeView !== "tasks" || document.visibilityState === "hidden" || !$("task-poll").checked) return;
+      if (U.busy || loading) { schedulePoll(); return; }
+      void refreshTasks(true);
+    }, interval);
+  }
+  async function refreshTasks(poll = false) {
+    if (disposed || U.activeView !== "tasks" || document.visibilityState === "hidden") { schedulePoll(); return; }
+    if (loading) return;
+    const current = ++generation;
+    loading = true;
+    $("task-list").setAttribute("aria-busy", "true");
+    updatePagination();
+    try {
+      // 失败的查询可指数退避；轮询不重试 action，也不创建新任务。
+      const result = await U.query("tasks", "list", U.clone(filters), { retries: poll ? 0 : 2 });
+      if (current !== generation || disposed) return;
+      if (!Array.isArray(result.items) || !Number.isInteger(result.total) || result.total < 0) throw new Error("任务列表结构不符合约定。");
+      result.items.forEach(taskId);
+      items = result.items;
+      total = result.total;
+      if (!items.length && filters.offset >= total && filters.offset > 0) {
+        filters.offset = Math.max(0, Math.floor(Math.max(0, total - 1) / filters.limit) * filters.limit);
+        loading = false;
+        return refreshTasks(poll);
+      }
+      renderTasks();
+      if (task && $("task-dialog").open) await readDetail(taskId(task));
+      pollFailures = 0;
+    } catch (error) {
+      if (current === generation) {
+        pollFailures = Math.min(4, pollFailures + 1);
+        $("task-page-label").textContent = "查询失败，请刷新重试";
+        if (!poll || pollFailures === 1) U.notify(U.message(error), true);
+      }
+    } finally {
+      if (current === generation) { loading = false; $("task-list").setAttribute("aria-busy", "false"); updatePagination(); }
+      schedulePoll();
+    }
+  }
+  async function mutateTask(operation, snapshot) {
+    await U.runExclusive(async () => {
+      U.requireResolved();
+      const id = taskId(snapshot);
+      // 不信任旧列表按钮；在发起写操作之前重新核对来源和能力。
+      const result = await U.query("tasks", "detail", { task_id: id });
+      if (!U.plainObject(result.task) || taskId(result.task) !== id || !canMutate(result.task, operation)) throw new Error("任务来源或状态已经改变，此任务目前不可执行该操作。请刷新列表。");
+      const params = { task_id: id };
+      const request = U.requestId();
+      let token;
+      if (operation === "retry") {
+        token = await U.confirmAction("retry", params, request, { title: "二次确认：重试任务与模型费用", description: "重试可能再次调用视觉模型或图像生成模型并计费。原任务已经发生的费用不会退回；本页面不会自动重试。", approve: "确认费用并重试" });
+        if (!token) return;
+      } else {
+        const accepted = await U.ask({ title: "取消网页任务", description: "只会取消允许取消的后续处理。模型请求如果已经开始，费用不会退回；不能保证中止已经在执行的模型调用。", summary: `任务号：${id}`, approve: "确认取消任务", danger: true });
+        if (!accepted) return;
+      }
+      const mutation = await U.action(operation, params, request, token);
+      U.notify(operation === "cancel" ? "已提交取消请求，请以刷新后的任务状态为准。" : `重试请求已受理${mutation.task_id ? `，任务号：${mutation.task_id}` : ""}。`);
+      await refreshTasks(false);
+    }, operation === "cancel" ? "正在确认取消任务…" : "正在确认重试费用…");
+    schedulePoll();
+  }
+  function applyFilters() {
+    if (U.busy || loading) return;
+    filters = { status: $("task-status-filter").value, origin: $("task-origin-filter").value, kind: $("task-kind-filter").value, task_id: $("task-id-filter").value.trim(), offset: 0, limit: Number($("task-page-size").value) };
+    const after = $("task-after-filter").value;
+    const before = $("task-before-filter").value;
+    if (after) filters.created_after = new Date(`${after}T00:00:00`).toISOString();
+    if (before) { const end = new Date(`${before}T00:00:00`); end.setDate(end.getDate() + 1); filters.created_before = end.toISOString(); }
+    void refreshTasks(false);
+  }
+  function bind() {
+    $("nav-gallery").addEventListener("click", () => U.navigate("gallery", { gallery_filters: galleryFilters }));
+    $("apply-task-filters").addEventListener("click", applyFilters);
+    $("refresh-tasks").addEventListener("click", () => { if (!U.busy) void refreshTasks(false); });
+    $("previous-task-page").addEventListener("click", () => { if (U.busy || loading) return; filters.offset = Math.max(0, filters.offset - filters.limit); void refreshTasks(false); });
+    $("next-task-page").addEventListener("click", () => { if (U.busy || loading) return; filters.offset += filters.limit; void refreshTasks(false); });
+    $("task-poll").addEventListener("change", schedulePoll);
+    $("task-close").addEventListener("click", closeTask);
+    $("task-load-preview").addEventListener("click", loadPreview);
+    $("task-copy-id").addEventListener("click", copyTaskId);
+    $("task-dialog").addEventListener("cancel", (event) => { event.preventDefault(); closeTask(); });
+    $("task-refresh-detail").addEventListener("click", () => { if (task && !U.busy) readDetail(taskId(task)).catch((error) => U.notify(U.message(error), true)); });
+    $("task-view-asset").addEventListener("click", () => { if (task?.asset_id) U.navigate("gallery", { asset_id: task.asset_id, gallery_filters: galleryFilters }); });
+    $("task-cancel").addEventListener("click", () => task && mutateTask("cancel", task));
+    $("task-retry").addEventListener("click", () => task && mutateTask("retry", task));
+    document.addEventListener("photo:lock", () => { updatePagination(); updateDetailControls(); schedulePoll(); });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") schedulePoll();
+      else if (U.activeView === "tasks" && $("task-poll").checked && !U.busy && !loading) void refreshTasks(true);
+      else schedulePoll();
+    });
+    document.addEventListener("photo:receipt", () => { if (U.activeView === "tasks" && !U.busy && !loading && document.visibilityState !== "hidden") void refreshTasks(false); });
+    document.addEventListener("photo:view", schedulePoll);
+    window.addEventListener("pagehide", () => { disposed = true; if (pollingTimer !== null) clearTimeout(pollingTimer); });
+  }
+  let bound = false;
+  async function start(state) {
+    if (U.plainObject(state.gallery_filters)) galleryFilters = state.gallery_filters;
+    if (!bound) { bind(); bound = true; }
+    $("busy-label").textContent = "";
+    updateDetailControls();
+    await refreshTasks(false);
+    if (typeof state.task_id === "string" && state.task_id) await openTask(state.task_id);
+  }
+  U.registerView("tasks", start);
+})();
+
+window.PhotoUI.startStudio().catch(window.PhotoUI.fatal);</script>
 </body></html>

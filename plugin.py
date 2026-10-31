@@ -512,7 +512,8 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
     ) -> dict[str, Any]:
         try:
             invocation = invocation_context(kwargs)
-            return self.service.task_result(
+            return await self.service.run_image_work(
+                self.service.task_result,
                 invocation,
                 task_id,
                 include_image=bool(include_image),
@@ -601,7 +602,7 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
             return {"success": True, "count": len(assets), "assets": [self._asset_data(item) for item in assets]}
         if op == "show":
             asset = self._resolve_asset(asset_id, category_value)
-            data = asset.reference_path.read_bytes()
+            image = await self.service.run_image_work(self.service.prepare_image, asset.reference_path)
             return {
                 "success": True,
                 "asset": self._asset_data(asset),
@@ -609,8 +610,8 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 "content_items": [
                     {
                         "type": "image",
-                        "data": base64.b64encode(data).decode("ascii"),
-                        "mime_type": "image/jpeg",
+                        "data": base64.b64encode(image.data).decode("ascii"),
+                        "mime_type": image.media_type,
                         "name": f"{asset.category.value}-{asset.id}.jpg",
                         "description": asset.name,
                     }
@@ -922,7 +923,9 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
                 f"Provider Base URL 已配置：{bool(self.config.openai.base_url.strip())}",
                 f"API Key 已配置：{bool(self.config.openai.api_key.strip())}",
                 f"生成模型：{self.config.openai.generation_model or '未配置'}",
-                f"参考图目标上限：{self.config.references.max_bytes} bytes",
+                f"参考图目标上限：{self.config.references.max_kb:g} KB",
+                f"结果下载上限：{self.config.openai.max_response_kb:g} KB",
+                f"发送图片大小上限：{self.config.output.image_max_kb:g} KB（超过时自动压缩）",
                 f"参考图数量：{len(refs)}",
                 f"排队任务数量：{len(queued)}",
                 "SQLite journal_mode：WAL",
@@ -1036,7 +1039,8 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
         return text
 
     async def _send_asset(self, asset: ReferenceAsset, stream_id: str) -> None:
-        data = base64.b64encode(asset.reference_path.read_bytes()).decode("ascii")
+        image = await self.service.run_image_work(self.service.prepare_image, asset.reference_path)
+        data = base64.b64encode(image.data).decode("ascii")
         sent = await self.ctx.send.image(data, stream_id)
         if not sent:
             raise RuntimeError("参考图发送失败")

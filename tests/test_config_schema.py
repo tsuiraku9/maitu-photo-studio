@@ -25,7 +25,7 @@ _CHINESE_TEXT = re.compile(r"[\u4e00-\u9fff]")
 
 def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     config = PhotoPluginConfig()
-    assert config.plugin.config_version == "1.7.0"
+    assert config.plugin.config_version == "1.9.2"
     assert config.model_tasks.rpc_timeout_seconds == 30.0
     assert config.model_tasks.selection_candidate_limit_per_category == 12
     assert config.references.require_person_reference is True
@@ -33,7 +33,7 @@ def test_every_webui_field_has_chinese_label_description_and_hint() -> None:
     schema = generate_plugin_config_schema(PhotoPluginConfig)
     fields = [field for section in schema["sections"].values() for field in section["fields"].values()]
 
-    assert len(fields) == 115
+    assert len(fields) == 125
     for field in fields:
         assert _CHINESE_TEXT.search(field["label"]), field["name"]
         assert _CHINESE_TEXT.search(field["description"]), field["name"]
