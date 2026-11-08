@@ -239,8 +239,8 @@ class MaiTuPhotoPlugin(MaiBotPlugin):
     def _harden_tool_metadata(metadata: dict[str, Any]) -> None:
         """Bind tool calls to the host-selected stream and close extra args.
 
-        The MaiBot 1.1.x host uses ``plugin.invoke_action`` to overwrite the
-        stream ID from its trusted execution context.  The regular
+        The host (also verified on MaiBot 1.4.2) uses ``plugin.invoke_action``
+        to overwrite the stream ID from its trusted execution context.  The regular
         ``plugin.invoke_tool`` path only fills missing fields, so an LLM could
         otherwise supply a different stream ID.  Rebuilding the parameter
         schema also tells model providers to reject undeclared context fields.

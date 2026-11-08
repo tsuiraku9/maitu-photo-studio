@@ -53,7 +53,7 @@
 
 ## 运行要求
 
-- MaiBot `>=1.3.6,<2.0.0`（需要官方自定义 WebUI 页面与图片上传支持）
+- MaiBot `>=1.3.6,<=1.4.99`（需要官方自定义 WebUI 页面与图片上传支持；兼容性核验覆盖 1.4.2）
 - Python `>=3.12`
 - MaiBot Plugin SDK `>=2.12.0,<3.0.0`
 - 支持 Images API 或 Chat Completions 的 OpenAI 兼容图片服务
